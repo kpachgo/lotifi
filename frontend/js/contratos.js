@@ -129,6 +129,44 @@ function calcularFinanciado() {
 
   document.getElementById('montoFinanciado').value =
     monto.toFixed(2);
+
+  recalcularCuotaAutomatica();
+}
+
+function recalcularCuotaAutomatica() {
+  const monto = Number(document.getElementById('montoFinanciado')?.value || 0);
+  const plazo = Number(document.getElementById('plazoMeses')?.value || 0);
+  const cuotaInput = document.getElementById('cuotaMensual');
+  if (!cuotaInput) return;
+
+  if (!monto || !plazo || plazo <= 0) {
+    cuotaInput.value = '';
+    calcularPrecioFinal();
+    return;
+  }
+
+  const tipoFinanciamiento =
+    document.querySelector('input[name="tipoFinanciamiento"]:checked')?.value ||
+    'interes_saldo';
+
+  let cuota = 0;
+
+  if (tipoFinanciamiento === 'interes_saldo') {
+    const tasaAnual = Number(document.getElementById('tasaInteresAnual')?.value || 16);
+    const tasaMensual = (tasaAnual / 100) / 12;
+
+    if (tasaMensual <= 0) {
+      cuota = monto / plazo;
+    } else {
+      const factor = Math.pow(1 + tasaMensual, plazo);
+      cuota = monto * ((tasaMensual * factor) / (factor - 1));
+    }
+  } else {
+    cuota = monto / plazo;
+  }
+
+  cuotaInput.value = Number(cuota).toFixed(2);
+  calcularPrecioFinal();
 }
 function calcularPrecioFinal() {
   const cuota = Number(document.getElementById('cuotaMensual').value || 0);
@@ -234,15 +272,6 @@ function onLoteChange(e) {
 
   calcularFinanciado(); // 🔥 esto recalcula monto + cuota
 }
-function toggleModoManual() {
-  const manual = document.getElementById('modoManualToggle').checked;
-
-  const montoInput = document.getElementById('montoFinanciado');
-  const cuotaInput = document.getElementById('cuotaMensual');
-
-  montoInput.disabled = !manual;
-  cuotaInput.disabled = !manual;
-}
 document.addEventListener('DOMContentLoaded', () => {
 
   // ===============================
@@ -275,10 +304,13 @@ document.addEventListener('DOMContentLoaded', () => {
   .addEventListener('input', calcularPrecioFinal);
 
 document.getElementById('plazoMeses')
-  .addEventListener('input', calcularPrecioFinal);
+  .addEventListener('input', recalcularCuotaAutomatica);
 
 document.getElementById('prima')
   .addEventListener('input', calcularPrecioFinal);
+
+  document.getElementById('tasaInteresAnual')
+    .addEventListener('input', recalcularCuotaAutomatica);
 
   // ===============================
   // TIPO DE FINANCIAMIENTO
@@ -297,13 +329,12 @@ document.getElementById('prima')
 
     document.getElementById('configPenalizacion')
       .classList.toggle('d-none', interes);
+
+    recalcularCuotaAutomatica();
   }
 
-  // ===============================
-  // MODO MANUAL
-  // ===============================
-  document.getElementById('modoManualToggle')
-    .addEventListener('change', toggleModoManual);
+  toggleTipo();
+  recalcularCuotaAutomatica();
 
   // ===============================
   // FORMULARIO
@@ -350,7 +381,7 @@ document.getElementById('prima')
       }
 
       if (!data.cuota || data.cuota <= 0) {
-        alert('Ingrese una cuota válida');
+        alert('No se pudo calcular una cuota valida');
         return;
       }
 

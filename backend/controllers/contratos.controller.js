@@ -1,5 +1,104 @@
 const db = require('../config/db');
 
+function round2(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function sumarMesesISO(fechaISO, meses) {
+  const [y, m, d] = String(fechaISO).split('-').map(Number);
+  if (!y || !m || !d) return fechaISO;
+
+  const base = new Date(y, m - 1, d);
+  const day = base.getDate();
+
+  const target = new Date(base.getFullYear(), base.getMonth() + meses, 1);
+  const ultimoDiaMes = new Date(
+    target.getFullYear(),
+    target.getMonth() + 1,
+    0
+  ).getDate();
+
+  target.setDate(Math.min(day, ultimoDiaMes));
+
+  const yy = target.getFullYear();
+  const mm = String(target.getMonth() + 1).padStart(2, '0');
+  const dd = String(target.getDate()).padStart(2, '0');
+
+  return `${yy}-${mm}-${dd}`;
+}
+
+function calcularCuotaPMT(monto, plazoMeses, tasaAnual, tipoFinanciamiento) {
+  const P = Number(monto || 0);
+  const n = Number(plazoMeses || 0);
+  if (P <= 0 || n <= 0) return 0;
+
+  if (tipoFinanciamiento !== 'interes_saldo') {
+    return round2(P / n);
+  }
+
+  const tasa = Number(tasaAnual || 16) / 100;
+  const r = tasa / 12;
+
+  if (r <= 0) {
+    return round2(P / n);
+  }
+
+  const factor = Math.pow(1 + r, n);
+  const cuota = P * ((r * factor) / (factor - 1));
+  return round2(cuota);
+}
+
+function generarPlanCapital({
+  montoFinanciado,
+  plazoMeses,
+  cuotaMensual,
+  tipoFinanciamiento,
+  tasaInteresAnual
+}) {
+  const plan = [];
+  let saldo = round2(montoFinanciado);
+  const n = Number(plazoMeses || 0);
+  const cuota = round2(cuotaMensual);
+  const tasaMensual = Number(tasaInteresAnual || 16) / 100 / 12;
+
+  for (let i = 1; i <= n; i += 1) {
+    if (saldo <= 0) {
+      plan.push({
+        numero_cuota: i,
+        capital_programado: 0
+      });
+      continue;
+    }
+
+    let interesMes = 0;
+    if (tipoFinanciamiento === 'interes_saldo') {
+      interesMes = round2(saldo * tasaMensual);
+    }
+
+    let capitalMes = round2(cuota - interesMes);
+    if (tipoFinanciamiento !== 'interes_saldo') {
+      capitalMes = round2(cuota);
+    }
+
+    if (capitalMes <= 0) {
+      capitalMes = saldo;
+    }
+
+    if (i === n || capitalMes > saldo) {
+      capitalMes = saldo;
+    }
+
+    saldo = round2(saldo - capitalMes);
+
+    plan.push({
+      numero_cuota: i,
+      capital_programado: capitalMes
+    });
+  }
+
+  return plan;
+}
+
 // BUSCAR CLIENTE
 exports.buscarCliente = async (req, res) => {
   try {
@@ -93,7 +192,6 @@ exports.crearContrato = async (req, res) => {
       prima,
       monto_financiado,
       plazo_meses,
-      cuota,
       fecha_inicio,
       tasa_interes_anual,
       penalizacion_fija,
@@ -131,13 +229,30 @@ exports.crearContrato = async (req, res) => {
       return res.status(409).json({ error: 'El lote ya no esta disponible' });
     }
 
-    function sumarMeses(fecha, meses) {
-      const f = new Date(fecha);
-      f.setMonth(f.getMonth() + meses);
-      return f.toISOString().split('T')[0];
+    const montoFinanciadoNum = round2(monto_financiado);
+    const plazoMesesNum = Number(plazo_meses || 0);
+    if (!Number.isInteger(plazoMesesNum) || plazoMesesNum <= 0) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Plazo de meses invalido' });
     }
 
-    const fechaVencimiento = sumarMeses(fecha_inicio, plazo_meses);
+    const tasaAnualContrato = round2(
+      tipo_financiamiento === 'interes_saldo'
+        ? (tasa_interes_anual ?? 16)
+        : 0
+    );
+    const cuotaCalculada = calcularCuotaPMT(
+      montoFinanciadoNum,
+      plazoMesesNum,
+      tasaAnualContrato,
+      tipo_financiamiento
+    );
+    if (montoFinanciadoNum > 0 && cuotaCalculada <= 0) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'No se pudo calcular la cuota' });
+    }
+
+    const fechaVencimiento = sumarMesesISO(fecha_inicio, plazoMesesNum);
 
     // ===============================
     // DEFINIR ESTADOS SEGÚN TIPO DE PAGO
@@ -145,7 +260,7 @@ exports.crearContrato = async (req, res) => {
     let estadoContrato = 'activo';
     let estadoLote = 'promesa_venta';
 
-    if (Number(monto_financiado) <= 0) {
+    if (montoFinanciadoNum <= 0) {
       estadoContrato = 'cancelado';
       estadoLote = 'vendido';
     }
@@ -178,14 +293,14 @@ exports.crearContrato = async (req, res) => {
       tipo_financiamiento,
       precio_total,
       prima,
-      monto_financiado,
-      plazo_meses,
-      cuota,
+      montoFinanciadoNum,
+      plazoMesesNum,
+      cuotaCalculada,
       fecha_inicio,
       fechaVencimiento,
       estadoContrato,
-      Number(monto_financiado),
-      tipo_financiamiento === 'interes_saldo' ? tasa_interes_anual : null,
+      montoFinanciadoNum,
+      tipo_financiamiento === 'interes_saldo' ? tasaAnualContrato : null,
       tipo_financiamiento === 'penalizacion_fija' ? penalizacion_fija : null,
       dias_gracia || 0
     ]);
@@ -204,17 +319,18 @@ exports.crearContrato = async (req, res) => {
     // ===============================
     // GENERAR CUOTAS SOLO SI HAY FINANCIAMIENTO
     // ===============================
-    if (Number(monto_financiado) > 0) {
+    if (montoFinanciadoNum > 0) {
+      const plan = generarPlanCapital({
+        montoFinanciado: montoFinanciadoNum,
+        plazoMeses: plazoMesesNum,
+        cuotaMensual: cuotaCalculada,
+        tipoFinanciamiento: tipo_financiamiento,
+        tasaInteresAnual: tasaAnualContrato
+      });
 
-      for (let i = 1; i <= plazo_meses; i++) {
-
-        const fechaCuota = new Date(fecha_inicio);
-        fechaCuota.setMonth(fechaCuota.getMonth() + i);
-
-        const fechaFormateada = fechaCuota
-          .toISOString()
-          .split('T')[0];
-
+      for (let i = 1; i <= plazoMesesNum; i += 1) {
+        const fechaFormateada = sumarMesesISO(fecha_inicio, i);
+        const tramo = plan[i - 1];
         await conn.query(`
           INSERT INTO cuotas (
             id_contrato,
@@ -228,15 +344,18 @@ exports.crearContrato = async (req, res) => {
           id_contrato,
           i,
           fechaFormateada,
-          cuota,
-          cuota
+          cuotaCalculada,
+          round2(tramo?.capital_programado || 0)
         ]);
       }
     }
 
     await conn.commit();
 
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      cuota_calculada: cuotaCalculada
+    });
 
   } catch (error) {
     await conn.rollback();

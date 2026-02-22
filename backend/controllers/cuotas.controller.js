@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const TASA_MORA_DIARIA = 0.035 / 30;
 
 
 // OBTENER PRIMERA CUOTA PENDIENTE CON MORA CALCULADA

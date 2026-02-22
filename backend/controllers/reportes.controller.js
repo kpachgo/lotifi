@@ -1,5 +1,9 @@
 const db = require('../config/db');
 
+function round2(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
 exports.obtenerReporteContratos = async (req, res) => {
   try {
     const { cliente, lote, desde, hasta, estado } = req.query;
@@ -215,22 +219,37 @@ exports.resumenContrato = async (req, res) => {
       [idContrato]
     );
 
-    const saldo_acumulado =
-      Number(contrato.prima) +
-      Number(totales.capital_pagado) +
-      Number(totales.interes_pagado) +
-      Number(totales.mora_pagada);
+    const prima = round2(contrato.prima);
+    const montoFinanciado = round2(contrato.monto_financiado);
+    const capitalPagado = round2(totales.capital_pagado);
+    const interesPagado = round2(totales.interes_pagado);
+    const moraPagada = round2(totales.mora_pagada);
+    const totalPagos = round2(totales.total_abonado);
+
+    // Regla contable real:
+    // saldo pendiente = monto financiado - capital pagado
+    const saldoPendienteReal = round2(
+      Math.max(0, montoFinanciado - capitalPagado)
+    );
+
+    // saldo acumulado (patrimonio del cliente) = prima + capital pagado
+    const saldoAcumuladoReal = round2(prima + capitalPagado);
+
+    // total abonado global = prima + pagos registrados (capital+interes+mora)
+    const totalAbonadoReal = round2(prima + totalPagos);
 
     res.json({
       precio_total: contrato.precio_total,
-      prima: contrato.prima,
-      monto_financiado: contrato.monto_financiado,
-      capital_pagado: totales.capital_pagado,
-      interes_pagado: totales.interes_pagado,
-      mora_pagada: totales.mora_pagada,
-      total_abonado: totales.total_abonado,
-      saldo_pendiente: contrato.capital_pendiente,
-      saldo_acumulado
+      prima,
+      monto_financiado: montoFinanciado,
+      capital_pagado: capitalPagado,
+      interes_pagado: interesPagado,
+      mora_pagada: moraPagada,
+      total_abonado: totalAbonadoReal,
+      total_pagos: totalPagos,
+      saldo_pendiente: saldoPendienteReal,
+      saldo_acumulado: saldoAcumuladoReal,
+      capital_pendiente_contrato: round2(contrato.capital_pendiente)
     });
 
   } catch (error) {

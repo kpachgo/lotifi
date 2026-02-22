@@ -1,4 +1,10 @@
 const db = require('../config/db');
+const MORA_MENSUAL_INTERES_SALDO = 0.035;
+const DIAS_BASE_MORA = 30;
+
+function round2(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
 
 exports.obtenerDeudores = async (req, res) => {
   try {
@@ -20,6 +26,18 @@ exports.obtenerDeudores = async (req, res) => {
         CONCAT('Pol. ', p.nombre_poligono, ' / Lote ', l.numero_lote) AS lote,
 
         COUNT(cu.id_cuota) AS cuotas_vencidas,
+        SUM(
+          CASE
+            WHEN DATEDIFF(CURDATE(), cu.fecha_vencimiento) > IFNULL(co.dias_gracia, 0)
+            THEN 1 ELSE 0
+          END
+        ) AS cuotas_con_mora_gracia,
+        SUM(
+          CASE
+            WHEN DATEDIFF(CURDATE(), cu.fecha_vencimiento) > IFNULL(co.dias_gracia, 0)
+            THEN cu.monto_cuota ELSE 0
+          END
+        ) AS total_cuotas_con_mora_gracia,
         MAX(cu.monto_cuota) AS valor_cuota,
         SUM(cu.monto_cuota) AS total_cuotas_vencidas,
         MAX(DATEDIFF(CURDATE(), cu.fecha_vencimiento)) AS dias_mora_max
@@ -46,23 +64,36 @@ exports.obtenerDeudores = async (req, res) => {
     const resultado = rows.map(r => {
 
       let monto_mora = 0;
+      const cuotasVencidasCalendario = Number(r.cuotas_vencidas || 0);
+      const totalVencidoCalendario = Number(r.total_cuotas_vencidas || 0);
+      const cuotasConMora = Number(r.cuotas_con_mora_gracia || 0);
+      const totalCuotasConMora = Number(r.total_cuotas_con_mora_gracia || 0);
+      let cuotasVencidasMostrar = cuotasVencidasCalendario;
+      let totalCuotasVencidasMostrar = totalVencidoCalendario;
 
       if (r.tipo_financiamiento === 'interes_saldo') {
 
-        const tasa = r.tasa_interes_anual / 100;
+        // Mora para interes_saldo:
+        // total_cuotas_vencidas * 3.5% mensual, prorrateado por dias (max 30)
+        const totalCuotasVencidas = Number(r.total_cuotas_vencidas || 0);
+        const diasMora = Number(r.dias_mora_max || 0);
+        const diasAplicados = Math.max(0, Math.min(diasMora, DIAS_BASE_MORA));
 
-        const interes =
-          (Number(r.capital_pendiente) * tasa * 30) / 360;
+        const interesMora =
+          totalCuotasVencidas *
+          MORA_MENSUAL_INTERES_SALDO *
+          (diasAplicados / DIAS_BASE_MORA);
 
-        monto_mora = Number(interes.toFixed(2));
+        monto_mora = Number(interesMora.toFixed(2));
 
       } else if (r.tipo_financiamiento === 'penalizacion_fija') {
 
-        if (r.dias_mora_max > r.dias_gracia) {
-          monto_mora =
-            Number(r.penalizacion_fija || 0) *
-            Number(r.cuotas_vencidas);
-        }
+        // En deudores para penalizacion se reporta solo lo que ya supero gracia.
+        cuotasVencidasMostrar = cuotasConMora;
+        totalCuotasVencidasMostrar = round2(totalCuotasConMora);
+        monto_mora =
+          Number(r.penalizacion_fija || 0) *
+          cuotasConMora;
       }
 
       return {
@@ -72,9 +103,12 @@ exports.obtenerDeudores = async (req, res) => {
         lotificacion: r.lotificacion,
         lote: r.lote,
         tipo_financiamiento: r.tipo_financiamiento,
-        cuotas_vencidas: r.cuotas_vencidas,
+        cuotas_vencidas: cuotasVencidasMostrar,
+        cuotas_con_mora_gracia: cuotasConMora,
+        cuotas_vencidas_calendario: cuotasVencidasCalendario,
         valor_cuota: Number(r.valor_cuota || 0),
-        total_cuotas_vencidas: Number(r.total_cuotas_vencidas || 0),
+        total_cuotas_vencidas: totalCuotasVencidasMostrar,
+        total_cuotas_vencidas_calendario: round2(totalVencidoCalendario),
         dias_mora: r.dias_mora_max,
         monto_mora: Number(monto_mora.toFixed(2)),
         capital_pendiente: Number(r.capital_pendiente)

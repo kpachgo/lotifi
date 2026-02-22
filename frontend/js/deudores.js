@@ -46,8 +46,20 @@ function renderDeudores(lista) {
   }
 
   lista.forEach(item => {
+    const esPenalizacion = item.tipo_financiamiento === 'penalizacion_fija';
+    const valorCuota = Number(item.valor_cuota || 0);
+    const cuotasVencidasMostradas = esPenalizacion
+      ? Number(item.cuotas_con_mora_gracia ?? item.cuotas_vencidas ?? 0)
+      : Number(item.cuotas_vencidas || 0);
+    const totalCuotasMostrado = esPenalizacion
+      ? Number(
+        item.total_cuotas_con_mora_gracia ??
+        (cuotasVencidasMostradas * valorCuota)
+      )
+      : Number(item.total_cuotas_vencidas || 0);
+
     const total =
-      (Number(item.cuotas_vencidas || 0) * Number(item.valor_cuota || 0)) +
+      totalCuotasMostrado +
       Number(item.monto_mora || 0);
 
     const badgeTipo =
@@ -61,9 +73,9 @@ function renderDeudores(lista) {
         <td>${item.lotificacion}</td>
         <td>${item.lote}</td>
         <td>${badgeTipo}</td>
-                <td class="text-center">${item.cuotas_vencidas}</td>
-        <td class="text-end">$${Number(item.valor_cuota || 0).toFixed(2)}</td>
-        <td class="text-end">$${Number(item.total_cuotas_vencidas || 0).toFixed(2)}</td>
+                <td class="text-center">${cuotasVencidasMostradas}</td>
+        <td class="text-end">$${valorCuota.toFixed(2)}</td>
+        <td class="text-end">$${totalCuotasMostrado.toFixed(2)}</td>
         <td class="text-center">${item.dias_mora}</td>
         <td class="text-end text-danger fw-bold">
           $${Number(item.monto_mora).toFixed(2)}

@@ -151,6 +151,7 @@
       font-weight: 600;
     }
 
+
     .modal-content {
       border-radius: 14px;
       border: 1px solid #e2e8f0;
@@ -190,7 +191,7 @@
 
     <div class="pg-hero">
       <h4 class="pg-title">Pagos</h4>
-      <p class="pg-subtitle">Busca cliente o codigo de lote, revisa estado de cuenta y registra pagos individuales o multiples.</p>
+      <p class="pg-subtitle">Busca cliente o codigo de lote, revisa estado de cuenta y registra pagos individuales o multiples con calculo financiero automatico.</p>
     </div>
 
     <div class="card pg-card">
@@ -281,7 +282,7 @@
                 <th>#</th>
                 <th>Vence</th>
                 <th>Cuota</th>
-                <th>Mora</th>
+                <th>Cargos</th>
                 <th>Estado</th>
                 <th>Total</th>
                 <th>Accion</th>
@@ -314,7 +315,7 @@
           </div>
 
           <div class="col-md-3">
-            <label class="form-label">Mora</label>
+            <label class="form-label">Cargos (Mora)</label>
             <input id="pagoMora" type="text" class="form-control" disabled>
           </div>
         </div>
@@ -380,7 +381,7 @@
         <h5 class="mb-3">Pago Multiple por Rango</h5>
 
         <div class="alert alert-light border py-2 mb-3">
-          Debe iniciar desde la primera cuota pendiente. No se permiten saltos.
+          Debe iniciar desde la primera cuota pendiente. No se permiten saltos. Los cargos se calculan automaticamente y la mora se aplica solo a la primera cuota si hay atraso.
         </div>
 
         <form id="formPagoMasivo">
@@ -400,19 +401,11 @@
           </div>
 
           <div class="row mb-3 g-3">
-            <div class="col-md-3">
-              <label class="form-label">Mora Manual Total</label>
-              <input id="pagoMasivoMora" class="form-control" type="number" min="0" step="0.01" value="0">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label">Interes Manual Total</label>
-              <input id="pagoMasivoInteres" class="form-control" type="number" min="0" step="0.01" value="0">
-            </div>
-            <div class="col-md-3">
+            <div class="col-md-6">
               <label class="form-label">Fecha Abono</label>
               <input id="pagoMasivoFecha" class="form-control" type="date" required>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-6">
               <label class="form-label">Fecha Recibo</label>
               <input id="pagoMasivoFechaRecibo" class="form-control" type="date" required>
             </div>

@@ -1,4 +1,5 @@
 const API_CONTRATOS = 'http://localhost:3000/api/contratos';
+let contextoCalculoPago = null;
 
 function parseFechaISOaLocal(fechaISO) {
   if (!fechaISO) return null;
@@ -34,6 +35,38 @@ function formatearFechaInput(fechaISO) {
   const mm = String(fecha.getMonth() + 1).padStart(2, '0');
   const dd = String(fecha.getDate()).padStart(2, '0');
   return `${yy}-${mm}-${dd}`;
+}
+
+function ajustarFechaDentroLimites(fechaYMD, minYMD, maxYMD) {
+  if (!fechaYMD) return fechaYMD;
+  if (minYMD && fechaYMD < minYMD) return minYMD;
+  if (maxYMD && fechaYMD > maxYMD) return maxYMD;
+  return fechaYMD;
+}
+
+function aplicarLimitesFechaPago(limites) {
+  const inputAbono = document.getElementById('pagoFecha');
+  const inputRecibo = document.getElementById('pagoFechaRecibo');
+  if (!inputAbono || !inputRecibo) return;
+
+  const min = limites?.min || '';
+  const max = limites?.max || '';
+
+  if (min) {
+    inputAbono.min = min;
+    inputRecibo.min = min;
+  } else {
+    inputAbono.removeAttribute('min');
+    inputRecibo.removeAttribute('min');
+  }
+
+  if (max) {
+    inputAbono.max = max;
+    inputRecibo.max = max;
+  } else {
+    inputAbono.removeAttribute('max');
+    inputRecibo.removeAttribute('max');
+  }
 }
 
 async function buscarClientePago() {
@@ -145,12 +178,18 @@ function renderEstadoCuenta(data) {
 
   const tbody = document.getElementById('tablaEstadoCuenta');
   tbody.innerHTML = '';
+  const limitesFecha = data?.limites_fecha_abono || {
+    min: formatearFechaInput(data?.contrato?.fecha_inicio),
+    max: formatearFechaInput(data?.contrato?.fecha_vencimiento)
+  };
+  aplicarLimitesFechaPago(limitesFecha);
 
   if (!data.cuota) {
+    contextoCalculoPago = null;
     tbody.innerHTML = `
       <tr>
         <td colspan="7" class="text-center text-success">
-          Contrato al día ✅
+          Contrato al dÃ­a âœ…
         </td>
       </tr>
     `;
@@ -158,13 +197,41 @@ function renderEstadoCuenta(data) {
   }
 
   const c = data.cuota;
+  const cuotasExigibles = Number(data?.cuotas_exigibles || 0);
+  const cuotaNumeroMostrada =
+    cuotasExigibles > 1 &&
+    data?.cuota_desde_requerida &&
+    data?.cuota_hasta_requerida
+      ? `${data.cuota_desde_requerida}-${data.cuota_hasta_requerida}`
+      : c.numero_cuota;
+  const cuotaMostrada = Number(
+    data?.total_cuotas_exigibles ?? c.monto_cuota ?? 0
+  );
+  const capitalCuota = Number(
+    data.capital_cuota ?? c.capital_pendiente ?? c.monto_cuota ?? 0
+  );
+  const cargos = Number(
+    data?.mora_global_exigible ?? data?.cargos ?? data?.penalizacion ?? 0
+  );
+  const totalMostrado = Number(
+    data?.total_sugerido_pago_unico ?? (cuotaMostrada + cargos)
+  );
+
+  contextoCalculoPago = {
+    tipo: data?.contrato?.tipo_financiamiento || '',
+    capitalContrato: Number(data?.contrato?.capital_pendiente || 0),
+    tasaAnual: Number(data?.contrato?.tasa_interes_anual || 0),
+    diasGracia: Number(data?.contrato?.dias_gracia || 0),
+    penalizacionFija: Number(data?.contrato?.penalizacion_fija || 0),
+    capitalCuota
+  };
 
   tbody.innerHTML = `
     <tr>
-      <td>${c.numero_cuota}</td>
+      <td>${cuotaNumeroMostrada}</td>
       <td>${formatearFechaCorta(c.fecha_vencimiento)}</td>
-      <td>$${Number(c.monto_cuota).toFixed(2)}</td>
-      <td>$${Number(data.penalizacion || 0).toFixed(2)}</td>
+      <td>$${cuotaMostrada.toFixed(2)}</td>
+      <td>$${cargos.toFixed(2)}</td>
       <td>
         <span class="badge ${
           data.estado_cuota === 'atrasada'
@@ -174,16 +241,17 @@ function renderEstadoCuenta(data) {
           ${data.estado_cuota}
         </span>
       </td>
-      <td>$${Number(data.total).toFixed(2)}</td>
+      <td>$${totalMostrado.toFixed(2)}</td>
       <td>
   <button
     class="btn btn-sm btn-success"
     onclick='prepararPago(
       ${c.id_cuota},
-      ${c.numero_cuota},
+      "${cuotaNumeroMostrada}",
       "${c.fecha_vencimiento}",
-      ${c.monto_cuota},
-      ${data.penalizacion || 0},
+      ${cuotaMostrada},
+      ${cargos},
+      ${capitalCuota},
       ${c.id_contrato}
     )'>
     Pagar
@@ -198,7 +266,8 @@ function prepararPago(
   numeroCuota,
   fechaVencimiento,
   montoCuota,
-  mora,
+  cargos,
+  capitalCuota,
   idContrato
   
 )
@@ -207,19 +276,22 @@ function prepararPago(
   .setAttribute('data-vencimiento', fechaVencimiento);
 
   document.getElementById('pagoFecha')
-  .setAttribute('data-tipo', window.tipoFinanciamiento);
+  .setAttribute('data-tipo', contextoCalculoPago?.tipo || '');
 
   document.getElementById('pagoFecha')
-  .setAttribute('data-capital', window.capitalPendiente);
+  .setAttribute('data-capital', contextoCalculoPago?.capitalContrato || 0);
 
   document.getElementById('pagoFecha')
-  .setAttribute('data-tasa', window.tasaInteres || 0);
+  .setAttribute('data-capital-cuota', Number(capitalCuota || 0));
 
   document.getElementById('pagoFecha')
-  .setAttribute('data-dias-gracia', window.diasGracia || 0);
+  .setAttribute('data-tasa', contextoCalculoPago?.tasaAnual || 0);
 
   document.getElementById('pagoFecha')
-  .setAttribute('data-penalizacion', window.penalizacionFija || 0);
+  .setAttribute('data-dias-gracia', contextoCalculoPago?.diasGracia || 0);
+
+  document.getElementById('pagoFecha')
+  .setAttribute('data-penalizacion', contextoCalculoPago?.penalizacionFija || 0);
 
 
   // Guardar IDs
@@ -233,16 +305,24 @@ function prepararPago(
   document.getElementById('pagoMontoCuota').value =
     Number(montoCuota).toFixed(2);
   document.getElementById('pagoMora').value =
-    Number(mora).toFixed(2);
+    Number(cargos).toFixed(2);
 
   // Sugerir total
-  const total = Number(montoCuota) + Number(mora);
+  const total = Number(montoCuota || 0) + Number(cargos || 0);
   document.getElementById('pagoMonto').value =
     total.toFixed(2);
 
-  // Fecha automática
-  const fechaSugerida = formatearFechaInput(fechaVencimiento);
-  document.getElementById('pagoFecha').value = fechaSugerida;
+  // Fecha automatica
+  const inputFechaAbono = document.getElementById('pagoFecha');
+  const minFecha = inputFechaAbono.getAttribute('min') || '';
+  const maxFecha = inputFechaAbono.getAttribute('max') || '';
+  const fechaSugeridaBase = formatearFechaInput(fechaVencimiento);
+  const fechaSugerida = ajustarFechaDentroLimites(
+    fechaSugeridaBase,
+    minFecha,
+    maxFecha
+  );
+  inputFechaAbono.value = fechaSugerida;
 
   // Limpiar editables
   document.getElementById('pagoForma').value = '';
@@ -253,12 +333,12 @@ function prepararPago(
   // Habilitar botones
   document.getElementById('btnRegistrarPago').disabled = false;
   document.getElementById('btnAdjuntarComprobante').disabled = false;
-  // 🔹 Scroll suave al formulario
+  // ðŸ”¹ Scroll suave al formulario
   document
     .getElementById('formPago')
     ?.scrollIntoView({ behavior: 'smooth' });
 
-  // 🔥 IMPORTANTE: quitar foco del botón que llamó esta función
+  // ðŸ”¥ IMPORTANTE: quitar foco del botÃ³n que llamÃ³ esta funciÃ³n
   if (document.activeElement) {
     document.activeElement.blur();
   }
@@ -270,7 +350,7 @@ async function buscarPorCodigoLote() {
   const codigo = document.getElementById('codigoLotePago').value.trim();
 
   if (!codigo) {
-    alert('Ingrese el código del lote');
+    alert('Ingrese el cÃ³digo del lote');
     return;
   }
 
@@ -288,11 +368,11 @@ async function buscarPorCodigoLote() {
     const data = await res.json();
 
     if (!res.ok) {
-      alert(data.error || 'No se pudo procesar el código');
+      alert(data.error || 'No se pudo procesar el cÃ³digo');
       return;
     }
 
-    // Mostrar bloque info rápida
+    // Mostrar bloque info rÃ¡pida
     document.getElementById('infoPagoRapido')
       .classList.remove('d-none');
 
@@ -307,13 +387,13 @@ async function buscarPorCodigoLote() {
     document.getElementById('idContratoActivo')
       .value = data.contrato.id_contrato;
 
-    // 👇 IMPORTANTE
+    // ðŸ‘‡ IMPORTANTE
     renderEstadoCuenta(data);
     actualizarContextoPagoMasivo(data.contrato.id_contrato, data.cuota);
 
   } catch (err) {
     console.error(err);
-    alert('Error de conexión con el servidor');
+    alert('Error de conexiÃ³n con el servidor');
   }
 }
 
@@ -345,14 +425,14 @@ async function subirComprobante(idPago) {
       return;
     }
 
-    // ✅ NO leer ruta_archivo aquí
+    // âœ… NO leer ruta_archivo aquÃ­
     alert('Comprobante subido correctamente');
 
     // cerrar modal
     const modalElement = document.getElementById('modalComprobante');
     const modalInstance = bootstrap.Modal.getInstance(modalElement);
 
-    // Quitar foco del botón activo
+    // Quitar foco del botÃ³n activo
     if (document.activeElement) {
     document.activeElement.blur();
     }
@@ -364,7 +444,7 @@ async function subirComprobante(idPago) {
 
   } catch (err) {
     console.error(err);
-    alert('Error de conexión al subir comprobante');
+    alert('Error de conexiÃ³n al subir comprobante');
   }
 }
 async function verComprobante(idPago) {
@@ -408,7 +488,7 @@ document.getElementById('formPago')
     btn.disabled = true;
     btn.innerText = 'Procesando...';
 
-    // 🔎 Normalizar monto (evitar coma decimal)
+    // ðŸ”Ž Normalizar monto (evitar coma decimal)
 const montoInput = document.getElementById('pagoMonto').value
   .trim()
   .replace(',', '.');
@@ -416,7 +496,7 @@ const montoInput = document.getElementById('pagoMonto').value
 const monto = parseFloat(montoInput);
 
 if (isNaN(monto) || monto <= 0) {
-  alert('Monto inválido');
+  alert('Monto invÃ¡lido');
   btn.disabled = false;
   btn.innerText = 'Registrar Pago';
   return;
@@ -448,25 +528,34 @@ try {
 } catch (err) {
   const text = await res.text();
   console.error("RESPUESTA NO JSON:", text);
-  throw new Error("Respuesta inválida del servidor");
+  throw new Error("Respuesta invÃ¡lida del servidor");
 }
 
 
       if (!res.ok) {
 
-  // ✅ Caso especial: pago excede saldo (última cuota / último pago)
   if (result && typeof result.total_necesario !== 'undefined') {
 
     const totalNecesario = Number(result.total_necesario || 0);
     const excedente = Number(result.excedente || 0);
+    const faltante = Number(result.faltante || 0);
 
-    alert(
-      `⚠️ Pago excede el saldo.\n` +
-      `Monto exacto para finalizar: $${totalNecesario.toFixed(2)}\n` +
-      `Excedente: $${excedente.toFixed(2)}`
-    );
+    if (faltante > 0) {
+      alert(
+        `Pago insuficiente.\n` +
+        `Monto requerido: $${totalNecesario.toFixed(2)}\n` +
+        `Faltante: $${faltante.toFixed(2)}`
+      );
+    } else if (excedente > 0) {
+      alert(
+        `Pago excede el saldo.\n` +
+        `Monto exacto para finalizar: $${totalNecesario.toFixed(2)}\n` +
+        `Excedente: $${excedente.toFixed(2)}`
+      );
+    } else {
+      alert(`Monto sugerido para esta fecha: $${totalNecesario.toFixed(2)}`);
+    }
 
-    // ✅ Autollenar con el monto exacto para que solo le dé "Registrar Pago"
     const inputMonto = document.getElementById('pagoMonto');
     if (inputMonto) inputMonto.value = totalNecesario.toFixed(2);
 
@@ -486,14 +575,14 @@ try {
       document.getElementById('modalPagoId').innerText = result.id_pago;
       document.getElementById('modalRecibo').innerText = data.numero_recibo;
 
-      // 🔄 Refrescar estado de cuenta
+      // ðŸ”„ Refrescar estado de cuenta
       const idContrato = document.getElementById('idContratoActivo').value;
 
       if (idContrato) {
         await seleccionarContratoPago(idContrato);
       }
 
-      // 🧹 Limpiar formulario
+      // ðŸ§¹ Limpiar formulario
       document.getElementById('formPago').reset();
       document.getElementById('idCuotaSeleccionada').value = '';
       document.getElementById('btnAdjuntarComprobante').disabled = true;
@@ -501,7 +590,7 @@ try {
       btn.disabled = true;
       btn.innerText = 'Registrar Pago';
 
-      // 🔵 Abrir modal SIEMPRE
+      // ðŸ”µ Abrir modal SIEMPRE
       const modalElement = document.getElementById('modalComprobante');
       const modal = new bootstrap.Modal(modalElement);
       modal.show();
@@ -509,7 +598,7 @@ try {
     } catch (error) {
 
       console.error('ERROR EN SUBMIT:', error);
-      alert('Error de conexión con el servidor');
+      alert('Error de conexiÃ³n con el servidor');
 
       btn.disabled = false;
       btn.innerText = 'Registrar Pago';
@@ -573,12 +662,12 @@ if (modalElement) {
   // Cuando el modal se termina de ocultar
   modalElement.addEventListener('hidden.bs.modal', function () {
 
-    // Quitar foco de cualquier botón dentro del modal
+    // Quitar foco de cualquier botÃ³n dentro del modal
     if (document.activeElement) {
       document.activeElement.blur();
     }
 
-    // Opcional: devolver foco al botón principal
+    // Opcional: devolver foco al botÃ³n principal
     const btnRegistrar = document.getElementById('btnRegistrarPago');
     if (btnRegistrar) {
       btnRegistrar.focus();
@@ -589,68 +678,87 @@ const inputFechaAbono = document.getElementById('pagoFecha');
 
 if (inputFechaAbono) {
 
-  inputFechaAbono.addEventListener('change', function () {
+  inputFechaAbono.addEventListener('change', async function () {
+    const fechaAbono = this.value;
+    const idContrato = Number(document.getElementById('idContratoActivo')?.value || 0);
 
-    const fechaPago = parseFechaISOaLocal(this.value);
-    const fechaVenc = parseFechaISOaLocal(
-      this.getAttribute('data-vencimiento')
-    );
+    if (!fechaAbono || !idContrato) return;
 
-    if (!fechaPago || !fechaVenc) {
+    const minFecha = this.getAttribute('min') || '';
+    const maxFecha = this.getAttribute('max') || '';
+
+    if (minFecha && fechaAbono < minFecha) {
+      alert(`La fecha de abono no puede ser menor a ${minFecha}.`);
+      this.value = minFecha;
+      document.getElementById('btnRegistrarPago').disabled = true;
       return;
     }
 
-    const tipo = this.getAttribute('data-tipo');
-    const capital = Number(this.getAttribute('data-capital') || 0);
-    const tasa = Number(this.getAttribute('data-tasa') || 0);
-    const diasGracia = Number(this.getAttribute('data-dias-gracia') || 0);
-    const penalizacionFija = Number(this.getAttribute('data-penalizacion') || 0);
-
-    const montoCuota = Number(
-      document.getElementById('pagoMontoCuota').value
-    );
-
-    let cargoExtra = 0;
-
-    if (fechaPago > fechaVenc) {
-
-      const diasAtraso = Math.floor(
-        (fechaPago - fechaVenc) / (1000 * 60 * 60 * 24)
-      );
-
-      if (tipo === 'penalizacion_fija') {
-
-        if (diasAtraso > diasGracia) {
-          cargoExtra = penalizacionFija;
-        }
-
-      }
-
-      if (tipo === 'interes_saldo') {
-
-        if (diasAtraso > diasGracia) {
-
-          const tasaDecimal = tasa / 100;
-
-          cargoExtra =
-            (capital * tasaDecimal * diasAtraso) / 360;
-
-        }
-
-      }
-
+    if (maxFecha && fechaAbono > maxFecha) {
+      alert(`La fecha de abono no puede ser mayor a ${maxFecha}.`);
+      this.value = maxFecha;
+      document.getElementById('btnRegistrarPago').disabled = true;
+      return;
     }
 
-    cargoExtra = Number(cargoExtra.toFixed(2));
+    try {
+      const res = await fetch(
+        `http://localhost:3000/api/pagos/estado/${idContrato}?fecha_abono=${encodeURIComponent(fechaAbono)}`
+      );
+      const data = await res.json();
 
-    document.getElementById('pagoMora').value =
-      cargoExtra.toFixed(2);
+      if (!res.ok) {
+        alert(data?.error || 'No se pudo validar la fecha de abono');
+        document.getElementById('btnRegistrarPago').disabled = true;
+        return;
+      }
 
-    const total = montoCuota + cargoExtra;
+      if (!data?.cuota) {
+        document.getElementById('btnRegistrarPago').disabled = true;
+        return;
+      }
 
-    document.getElementById('pagoMonto').value =
-      total.toFixed(2);
+      renderEstadoCuenta(data);
 
+      const c = data.cuota;
+      const cuotasExigibles = Number(data?.cuotas_exigibles || 0);
+      const numeroCuotaMostrada =
+        cuotasExigibles > 1 &&
+        data?.cuota_desde_requerida &&
+        data?.cuota_hasta_requerida
+          ? `${data.cuota_desde_requerida}-${data.cuota_hasta_requerida}`
+          : c.numero_cuota;
+      const cuotaMostrada = Number(
+        data?.total_cuotas_exigibles ?? c.monto_cuota ?? 0
+      );
+      const cargos = Number(
+        data?.mora_global_exigible ?? data?.cargos ?? 0
+      );
+      const total = Number(
+        data?.total_sugerido_pago_unico ?? (cuotaMostrada + cargos)
+      );
+
+      document.getElementById('idCuotaSeleccionada').value = c.id_cuota;
+      document.getElementById('pagoNumeroCuota').value = numeroCuotaMostrada;
+      document.getElementById('pagoVencimiento').value = formatearFechaCorta(c.fecha_vencimiento);
+      document.getElementById('pagoMontoCuota').value = cuotaMostrada.toFixed(2);
+      document.getElementById('pagoMora').value = cargos.toFixed(2);
+      document.getElementById('pagoMonto').value = total.toFixed(2);
+
+      inputFechaAbono.setAttribute('data-vencimiento', c.fecha_vencimiento);
+      inputFechaAbono.setAttribute('data-tipo', data?.contrato?.tipo_financiamiento || '');
+      inputFechaAbono.setAttribute('data-capital', Number(data?.contrato?.capital_pendiente || 0));
+      inputFechaAbono.setAttribute('data-capital-cuota', Number(data?.capital_cuota ?? c.capital_pendiente ?? 0));
+      inputFechaAbono.setAttribute('data-tasa', Number(data?.contrato?.tasa_interes_anual || 0));
+      inputFechaAbono.setAttribute('data-dias-gracia', Number(data?.contrato?.dias_gracia || 0));
+      inputFechaAbono.setAttribute('data-penalizacion', Number(data?.contrato?.penalizacion_fija || 0));
+
+      document.getElementById('btnRegistrarPago').disabled = false;
+    } catch (error) {
+      console.error('Error validando fecha de abono:', error);
+      alert('Error de conexion al validar fecha de abono');
+      document.getElementById('btnRegistrarPago').disabled = true;
+    }
   });
 
 }
@@ -697,8 +805,6 @@ function actualizarResumenPagoMasivo() {
   const elResumen = document.getElementById('resumenPagoMasivo');
   const desde = Number(document.getElementById('pagoMasivoDesde')?.value || 0);
   const hasta = Number(document.getElementById('pagoMasivoHasta')?.value || 0);
-  const mora = Number(document.getElementById('pagoMasivoMora')?.value || 0);
-  const interes = Number(document.getElementById('pagoMasivoInteres')?.value || 0);
 
   if (!elResumen) return;
 
@@ -710,7 +816,7 @@ function actualizarResumenPagoMasivo() {
   const cuotas = (hasta - desde) + 1;
   elResumen.innerText =
     `Rango: cuota ${desde} a ${hasta} (${cuotas} cuotas). ` +
-    `Mora manual: $${mora.toFixed(2)} | Interes manual: $${interes.toFixed(2)}`;
+    'Calculo automatico: mora solo en la primera cuota si hay atraso.';
 }
 
 const formPagoMasivo = document.getElementById('formPagoMasivo');
@@ -748,9 +854,7 @@ if (formPagoMasivo) {
       fecha_recibo: document.getElementById('pagoMasivoFechaRecibo').value,
       forma_pago: formaPago,
       banco: banco || null,
-      numero_recibo: document.getElementById('pagoMasivoRecibo').value.trim(),
-      mora_total_manual: Number(document.getElementById('pagoMasivoMora').value || 0),
-      interes_total_manual: Number(document.getElementById('pagoMasivoInteres').value || 0)
+      numero_recibo: document.getElementById('pagoMasivoRecibo').value.trim()
     };
 
     if (!payload.fecha_abono || !payload.forma_pago || !payload.numero_recibo) {
@@ -787,8 +891,6 @@ if (formPagoMasivo) {
         `Total: $${Number(resumen.monto_total_pagado || 0).toFixed(2)}`
       );
 
-      document.getElementById('pagoMasivoMora').value = '0';
-      document.getElementById('pagoMasivoInteres').value = '0';
       document.getElementById('pagoMasivoRecibo').value = '';
       document.getElementById('pagoMasivoBanco').value = '';
 
@@ -803,7 +905,7 @@ if (formPagoMasivo) {
     }
   });
 
-  ['pagoMasivoHasta', 'pagoMasivoMora', 'pagoMasivoInteres']
+  ['pagoMasivoHasta']
     .forEach((id) => {
       const el = document.getElementById(id);
       if (el) {
@@ -811,5 +913,7 @@ if (formPagoMasivo) {
       }
     });
 }
+
+
 
 
