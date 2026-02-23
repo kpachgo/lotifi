@@ -37,11 +37,42 @@ function formatearFechaInput(fechaISO) {
   return `${yy}-${mm}-${dd}`;
 }
 
+function fechaHoyYMDLocal() {
+  const fecha = new Date();
+  const yy = fecha.getFullYear();
+  const mm = String(fecha.getMonth() + 1).padStart(2, '0');
+  const dd = String(fecha.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 function ajustarFechaDentroLimites(fechaYMD, minYMD, maxYMD) {
   if (!fechaYMD) return fechaYMD;
   if (minYMD && fechaYMD < minYMD) return minYMD;
   if (maxYMD && fechaYMD > maxYMD) return maxYMD;
   return fechaYMD;
+}
+
+function actualizarMensajesRango(data, cuotaNumeroMostrada) {
+  const leyendaEstado = document.getElementById('estadoCuentaLeyenda');
+  const detalleRango = document.getElementById('pagoDetalleRango');
+  if (!leyendaEstado && !detalleRango) return;
+
+  const cuotasExigibles = Number(data?.cuotas_exigibles || 0);
+  const primeraPendiente = Number(data?.cuota?.numero_cuota || 0);
+  const desde = Number(data?.cuota_desde_requerida || 0);
+  const hasta = Number(data?.cuota_hasta_requerida || 0);
+  const fechaRef = data?.fecha_abono_referencia || fechaHoyYMDLocal();
+
+  let texto = `Cuota pendiente actual: ${primeraPendiente || cuotaNumeroMostrada}.`;
+
+  if (cuotasExigibles > 1 && desde > 0 && hasta > 0) {
+    texto =
+      `Cuota pendiente actual: ${primeraPendiente}. ` +
+      `Por fecha de abono ${fechaRef}, el rango exigible es ${desde}-${hasta}.`;
+  }
+
+  if (leyendaEstado) leyendaEstado.textContent = texto;
+  if (detalleRango) detalleRango.textContent = texto;
 }
 
 function aplicarLimitesFechaPago(limites) {
@@ -186,6 +217,14 @@ function renderEstadoCuenta(data) {
 
   if (!data.cuota) {
     contextoCalculoPago = null;
+    const leyendaEstado = document.getElementById('estadoCuentaLeyenda');
+    const detalleRango = document.getElementById('pagoDetalleRango');
+    if (leyendaEstado) {
+      leyendaEstado.textContent = 'Contrato al dia. No hay cuotas exigibles por fecha.';
+    }
+    if (detalleRango) {
+      detalleRango.textContent = 'Contrato al dia. No hay rango exigible.';
+    }
     tbody.innerHTML = `
       <tr>
         <td colspan="7" class="text-center text-success">
@@ -204,9 +243,13 @@ function renderEstadoCuenta(data) {
     data?.cuota_hasta_requerida
       ? `${data.cuota_desde_requerida}-${data.cuota_hasta_requerida}`
       : c.numero_cuota;
+  actualizarMensajesRango(data, cuotaNumeroMostrada);
+
   const cuotaMostrada = Number(
     data?.total_cuotas_exigibles ?? c.monto_cuota ?? 0
   );
+  const cuotaBase = Number(c?.monto_cuota ?? 0);
+  const cuotasDelRango = cuotasExigibles > 0 ? cuotasExigibles : 1;
   const capitalCuota = Number(
     data.capital_cuota ?? c.capital_pendiente ?? c.monto_cuota ?? 0
   );
@@ -230,7 +273,10 @@ function renderEstadoCuenta(data) {
     <tr>
       <td>${cuotaNumeroMostrada}</td>
       <td>${formatearFechaCorta(c.fecha_vencimiento)}</td>
-      <td>$${cuotaMostrada.toFixed(2)}</td>
+      <td>
+        $${cuotaMostrada.toFixed(2)}
+        <div class="small text-muted">Cuota base: $${cuotaBase.toFixed(2)}${cuotasDelRango > 1 ? ` x ${cuotasDelRango}` : ''}</div>
+      </td>
       <td>$${cargos.toFixed(2)}</td>
       <td>
         <span class="badge ${
@@ -311,12 +357,14 @@ function prepararPago(
   const total = Number(montoCuota || 0) + Number(cargos || 0);
   document.getElementById('pagoMonto').value =
     total.toFixed(2);
+  document.getElementById('pagoMonto')
+    .setAttribute('data-total-sugerido', total.toFixed(2));
 
   // Fecha automatica
   const inputFechaAbono = document.getElementById('pagoFecha');
   const minFecha = inputFechaAbono.getAttribute('min') || '';
   const maxFecha = inputFechaAbono.getAttribute('max') || '';
-  const fechaSugeridaBase = formatearFechaInput(fechaVencimiento);
+  const fechaSugeridaBase = fechaHoyYMDLocal();
   const fechaSugerida = ajustarFechaDentroLimites(
     fechaSugeridaBase,
     minFecha,
@@ -500,6 +548,26 @@ if (isNaN(monto) || monto <= 0) {
   btn.disabled = false;
   btn.innerText = 'Registrar Pago';
   return;
+}
+
+const numeroCuotaTexto = String(
+  document.getElementById('pagoNumeroCuota')?.value || ''
+).trim();
+const totalSugerido = Number(
+  document.getElementById('pagoMonto')?.getAttribute('data-total-sugerido') || 0
+);
+const esRangoExigible = numeroCuotaTexto.includes('-');
+if (esRangoExigible && totalSugerido > 0 && monto < totalSugerido) {
+  const confirmar = window.confirm(
+    `El monto ingresado ($${monto.toFixed(2)}) no cubre el total sugerido del rango exigible ($${totalSugerido.toFixed(2)}).\n` +
+    'Se aplicara primero a mora, luego a interes y despues a capital, quedando saldo pendiente.\n\n' +
+    'Desea continuar con el pago parcial?'
+  );
+  if (!confirmar) {
+    btn.disabled = false;
+    btn.innerText = 'Registrar Pago';
+    return;
+  }
 }
 
 const data = {
@@ -744,6 +812,8 @@ if (inputFechaAbono) {
       document.getElementById('pagoMontoCuota').value = cuotaMostrada.toFixed(2);
       document.getElementById('pagoMora').value = cargos.toFixed(2);
       document.getElementById('pagoMonto').value = total.toFixed(2);
+      document.getElementById('pagoMonto')
+        .setAttribute('data-total-sugerido', total.toFixed(2));
 
       inputFechaAbono.setAttribute('data-vencimiento', c.fecha_vencimiento);
       inputFechaAbono.setAttribute('data-tipo', data?.contrato?.tipo_financiamiento || '');

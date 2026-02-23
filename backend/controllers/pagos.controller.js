@@ -210,17 +210,22 @@ function calcularMoraGlobalPagoUnico(contrato, cuotasExigibles, fechaAbonoYMD) {
 
   const diasGracia = toNumber(contrato.dias_gracia, 0);
   if (contrato.tipo_financiamiento === 'interes_saldo') {
-    const diasAtraso = calcularDiasAtraso(
-      fechaAbonoYMD,
-      cuotasExigibles[0].fecha_vencimiento
-    );
-    if (diasAtraso <= diasGracia) return 0;
+    const moraTotal = cuotasExigibles.reduce((acc, cuota) => {
+      const diasAtraso = calcularDiasAtraso(
+        fechaAbonoYMD,
+        cuota.fecha_vencimiento
+      );
+      if (diasAtraso <= diasGracia) return acc;
 
-    const diasAplicados = Math.max(0, Math.min(diasAtraso, DIAS_BASE_MORA));
-    const totalCuotas = calcularTotalCuotasExigibles(cuotasExigibles);
-    return round2(
-      totalCuotas * MORA_MENSUAL_INTERES_SALDO * (diasAplicados / DIAS_BASE_MORA)
-    );
+      const diasAplicados = Math.max(0, Math.min(diasAtraso, DIAS_BASE_MORA));
+      const moraCuota = toNumber(cuota.monto_cuota, 0)
+        * MORA_MENSUAL_INTERES_SALDO
+        * (diasAplicados / DIAS_BASE_MORA);
+
+      return acc + moraCuota;
+    }, 0);
+
+    return round2(moraTotal);
   }
 
   if (contrato.tipo_financiamiento === 'penalizacion_fija') {
@@ -241,6 +246,75 @@ function calcularTotalSugeridoPagoUnico(contrato, cuotasExigibles, fechaAbonoYMD
     total_cuotas_exigibles: totalCuotas,
     mora_global: moraGlobal,
     total_sugerido: round2(totalCuotas + moraGlobal)
+  };
+}
+
+async function construirPlanPagoExigible(conn, {
+  contrato,
+  cuotasExigibles,
+  fechaAbonoYMD
+}) {
+  if (!Array.isArray(cuotasExigibles) || cuotasExigibles.length === 0) {
+    return {
+      plan_aplicacion: [],
+      total_capital: 0,
+      total_interes: 0,
+      mora_global: 0,
+      total_requerido: 0
+    };
+  }
+
+  const planAplicacion = [];
+  let saldoBaseIteracion = toNumber(contrato.capital_pendiente);
+
+  for (let i = 0; i < cuotasExigibles.length; i += 1) {
+    const cuotaPlan = cuotasExigibles[i];
+    const detallePlan = await calcularDetalleCuota(conn, {
+      contrato: {
+        ...contrato,
+        capital_pendiente: saldoBaseIteracion
+      },
+      cuota: cuotaPlan,
+      fechaAbonoYMD,
+      aplicarMora: true,
+      saldoContratoBase: saldoBaseIteracion
+    });
+
+    const abonoCapital = round2(toNumber(cuotaPlan.capital_pendiente));
+    const abonoInteres = round2(detallePlan.interes_pendiente);
+    const abonoMora = round2(detallePlan.mora_pendiente);
+    const montoTotal = round2(abonoCapital + abonoInteres + abonoMora);
+
+    planAplicacion.push({
+      cuota: cuotaPlan,
+      abono_capital: abonoCapital,
+      abono_interes: abonoInteres,
+      abono_mora: abonoMora,
+      monto_total: montoTotal
+    });
+
+    saldoBaseIteracion = round2(saldoBaseIteracion - abonoCapital);
+  }
+
+  const totalCapital = round2(
+    planAplicacion.reduce((acc, p) => acc + p.abono_capital, 0)
+  );
+  const totalInteres = round2(
+    planAplicacion.reduce((acc, p) => acc + p.abono_interes, 0)
+  );
+  const moraGlobal = round2(
+    planAplicacion.reduce((acc, p) => acc + p.abono_mora, 0)
+  );
+  const totalRequerido = round2(
+    planAplicacion.reduce((acc, p) => acc + p.monto_total, 0)
+  );
+
+  return {
+    plan_aplicacion: planAplicacion,
+    total_capital: totalCapital,
+    total_interes: totalInteres,
+    mora_global: round2(moraGlobal),
+    total_requerido: totalRequerido
   };
 }
 
@@ -382,19 +456,32 @@ exports.estadoCuentaContrato = async (req, res) => {
     const cuotasExigibles = cuotasPendientes.filter((c) =>
       cuotaVencidaALaFecha(c, fechaRef)
     );
-    const cuotasParaPagoUnico = cuotasExigibles.length ? cuotasExigibles : [cuota];
-    const totalesPagoUnico = calcularTotalSugeridoPagoUnico(
-      contrato,
-      cuotasParaPagoUnico,
-      fechaRef
-    );
-
     const detalle = await calcularDetalleCuota(conn, {
       contrato,
       cuota,
       fechaAbonoYMD: fechaRef,
       aplicarMora: true
     });
+
+    let subtotalExigible = round2(detalle.capital_pendiente + detalle.interes_pendiente);
+    let moraGlobalExigible = round2(detalle.mora_pendiente);
+    let totalSugerido = round2(detalle.total);
+    let interesGlobalExigible = round2(detalle.interes_pendiente);
+    let capitalGlobalExigible = round2(detalle.capital_pendiente);
+
+    if (cuotasExigibles.length > 1) {
+      const planExigible = await construirPlanPagoExigible(conn, {
+        contrato,
+        cuotasExigibles,
+        fechaAbonoYMD: fechaRef
+      });
+
+      capitalGlobalExigible = round2(planExigible.total_capital);
+      interesGlobalExigible = round2(planExigible.total_interes);
+      subtotalExigible = round2(capitalGlobalExigible + interesGlobalExigible);
+      moraGlobalExigible = round2(planExigible.mora_global);
+      totalSugerido = round2(planExigible.total_requerido);
+    }
 
     res.json({
       contrato,
@@ -413,7 +500,7 @@ exports.estadoCuentaContrato = async (req, res) => {
       ),
       total: detalle.total,
       fecha_abono_referencia: fechaRef,
-      requiere_pago_masivo: false,
+      requiere_pago_masivo: cuotasExigibles.length > 1,
       cuota_desde_requerida: cuotasExigibles.length > 1
         ? Number(cuotasExigibles[0].numero_cuota)
         : null,
@@ -421,9 +508,11 @@ exports.estadoCuentaContrato = async (req, res) => {
         ? Number(cuotasExigibles[cuotasExigibles.length - 1].numero_cuota)
         : null,
       cuotas_exigibles: cuotasExigibles.length,
-      total_cuotas_exigibles: totalesPagoUnico.total_cuotas_exigibles,
-      mora_global_exigible: totalesPagoUnico.mora_global,
-      total_sugerido_pago_unico: totalesPagoUnico.total_sugerido,
+      capital_global_exigible: capitalGlobalExigible,
+      interes_global_exigible: interesGlobalExigible,
+      total_cuotas_exigibles: subtotalExigible,
+      mora_global_exigible: moraGlobalExigible,
+      total_sugerido_pago_unico: totalSugerido,
       limites_fecha_abono: {
         min: limitesFecha.fechaInicio,
         max: limitesFecha.fechaVencimiento
@@ -570,79 +659,78 @@ exports.registrarPago = async (req, res) => {
     };
 
     if (cuotasExigibles.length > 1) {
-      const moraGlobal = calcularMoraGlobalPagoUnico(
+      const planExigible = await construirPlanPagoExigible(conn, {
         contrato,
         cuotasExigibles,
         fechaAbonoYMD
-      );
+      });
 
-      const planAplicacion = [];
-      let saldoBaseIteracion = toNumber(contrato.capital_pendiente);
+      const planAplicacion = planExigible.plan_aplicacion;
+      const totalRequerido = round2(planExigible.total_requerido);
+      const pagoParcialExigible = montoPagadoNum < totalRequerido;
+      const cuotaDesde = Number(cuotasExigibles[0].numero_cuota);
+      const cuotaHasta = Number(cuotasExigibles[cuotasExigibles.length - 1].numero_cuota);
+      restante = montoPagadoNum;
+      let ultimaCuotaProcesada = Number(cuota.numero_cuota);
 
-      for (let i = 0; i < cuotasExigibles.length; i += 1) {
-        const cuotaPlan = cuotasExigibles[i];
-        const detallePlan = await calcularDetalleCuota(conn, {
-          contrato: {
-            ...contrato,
-            capital_pendiente: saldoBaseIteracion
-          },
-          cuota: cuotaPlan,
-          fechaAbonoYMD,
-          aplicarMora: false,
-          saldoContratoBase: saldoBaseIteracion
-        });
+      const aplicacionPorCuota = planAplicacion.map((p) => ({
+        ...p,
+        aplicado_mora: 0,
+        aplicado_interes: 0,
+        aplicado_capital: 0
+      }));
 
-        const abonoCapital = round2(toNumber(cuotaPlan.capital_pendiente));
-        const abonoInteres = round2(detallePlan.interes_pendiente);
-        const abonoMora = i === 0 ? moraGlobal : 0;
-        const montoTotal = round2(abonoCapital + abonoInteres + abonoMora);
+      const aplicarBucket = (campoPendiente, campoAplicado) => {
+        for (let i = 0; i < aplicacionPorCuota.length; i += 1) {
+          if (restante <= 0) break;
+          const cuotaAplicacion = aplicacionPorCuota[i];
+          const pendiente = round2(
+            toNumber(cuotaAplicacion[campoPendiente]) - toNumber(cuotaAplicacion[campoAplicado])
+          );
+          if (pendiente <= 0) continue;
 
-        planAplicacion.push({
-          cuota: cuotaPlan,
-          abono_capital: abonoCapital,
-          abono_interes: abonoInteres,
-          abono_mora: abonoMora,
-          monto_total: montoTotal
-        });
+          const abono = round2(Math.min(restante, pendiente));
+          cuotaAplicacion[campoAplicado] = round2(
+            toNumber(cuotaAplicacion[campoAplicado]) + abono
+          );
+          restante = round2(restante - abono);
+        }
+      };
 
-        saldoBaseIteracion = round2(saldoBaseIteracion - abonoCapital);
-      }
+      // Regla estricta para rango exigible:
+      // 1) Toda la mora del rango, 2) todo el interes del rango, 3) capital.
+      aplicarBucket('abono_mora', 'aplicado_mora');
+      aplicarBucket('abono_interes', 'aplicado_interes');
+      aplicarBucket('abono_capital', 'aplicado_capital');
 
-      const totalRequerido = round2(
-        planAplicacion.reduce((acc, p) => acc + p.monto_total, 0)
-      );
+      for (let i = 0; i < aplicacionPorCuota.length; i += 1) {
+        const p = aplicacionPorCuota[i];
+        const abonoMora = round2(p.aplicado_mora);
+        const abonoInteres = round2(p.aplicado_interes);
+        const abonoCapital = round2(p.aplicado_capital);
+        const totalAplicadoCuota = round2(abonoMora + abonoInteres + abonoCapital);
+        if (totalAplicadoCuota <= 0) continue;
 
-      if (montoPagadoNum < totalRequerido) {
-        const cuotaDesde = Number(cuotasExigibles[0].numero_cuota);
-        const cuotaHasta = Number(cuotasExigibles[cuotasExigibles.length - 1].numero_cuota);
-        await conn.rollback();
-        return res.status(400).json({
-          error:
-            `Para la fecha de abono debe cancelar completo de cuota ${cuotaDesde} a ${cuotaHasta}.`,
-          total_necesario: totalRequerido,
-          faltante: round2(totalRequerido - montoPagadoNum),
-          cuotas_exigibles: cuotasExigibles.length,
-          cuota_desde_requerida: cuotaDesde,
-          cuota_hasta_requerida: cuotaHasta
-        });
-      }
-
-      restante = round2(montoPagadoNum - totalRequerido);
-      numeroCuotaLimiteExtras = Number(
-        cuotasExigibles[cuotasExigibles.length - 1].numero_cuota
-      );
-
-      for (let i = 0; i < planAplicacion.length; i += 1) {
-        const p = planAplicacion[i];
+        const nuevoCapitalCuota = round2(
+          toNumber(p.cuota.capital_pendiente) - abonoCapital
+        );
 
         await conn.query(
           `
           UPDATE cuotas
-          SET capital_pendiente = 0,
-              estado = 'pagada'
+          SET capital_pendiente = ?,
+              estado = ?
           WHERE id_cuota = ?
           `,
-          [p.cuota.id_cuota]
+          [
+            nuevoCapitalCuota,
+            estadoCuotaSegunFecha(
+              nuevoCapitalCuota,
+              fechaAbonoYMD,
+              p.cuota.fecha_vencimiento
+            ),
+            p.cuota.id_cuota
+          ]
         );
 
         const numeroReciboLinea = numero_recibo
@@ -664,10 +752,10 @@ exports.registrarPago = async (req, res) => {
             fechaReciboYMD,
             forma_pago,
             banco || null,
-            p.abono_capital,
-            p.abono_interes,
-            p.abono_mora,
-            p.monto_total,
+            abonoCapital,
+            abonoInteres,
+            abonoMora,
+            totalAplicadoCuota,
             numeroReciboLinea
           ]
         );
@@ -680,26 +768,45 @@ exports.registrarPago = async (req, res) => {
           id_pago: insertResult.insertId,
           id_cuota: p.cuota.id_cuota,
           numero_cuota: p.cuota.numero_cuota,
-          abono_capital: p.abono_capital,
-          abono_interes: p.abono_interes,
-          abono_mora: p.abono_mora,
-          monto_total: p.monto_total
+          abono_capital: abonoCapital,
+          abono_interes: abonoInteres,
+          abono_mora: abonoMora,
+          monto_total: totalAplicadoCuota
         });
 
-        capitalAplicadoTotal = round2(capitalAplicadoTotal + p.abono_capital);
-        capitalContratoActual = round2(capitalContratoActual - p.abono_capital);
+        capitalAplicadoTotal = round2(capitalAplicadoTotal + abonoCapital);
+        capitalContratoActual = round2(capitalContratoActual - abonoCapital);
+        ultimaCuotaProcesada = Number(p.cuota.numero_cuota);
       }
+
+      if (!pagosAplicados.length) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'No se pudo aplicar el pago a las cuotas exigibles'
+        });
+      }
+
+      numeroCuotaLimiteExtras = pagoParcialExigible
+        ? ultimaCuotaProcesada
+        : Number(cuotasExigibles[cuotasExigibles.length - 1].numero_cuota);
 
       detalleRespuesta = {
         abono_capital: round2(
-          planAplicacion.reduce((acc, p) => acc + p.abono_capital, 0)
+          pagosAplicados.reduce((acc, p) => acc + toNumber(p.abono_capital), 0)
         ),
         abono_interes: round2(
-          planAplicacion.reduce((acc, p) => acc + p.abono_interes, 0)
+          pagosAplicados.reduce((acc, p) => acc + toNumber(p.abono_interes), 0)
         ),
         abono_mora: round2(
-          planAplicacion.reduce((acc, p) => acc + p.abono_mora, 0)
-        )
+          pagosAplicados.reduce((acc, p) => acc + toNumber(p.abono_mora), 0)
+        ),
+        total_requerido_rango: totalRequerido,
+        pago_parcial_rango: pagoParcialExigible,
+        cuota_desde_requerida: cuotaDesde,
+        cuota_hasta_requerida: cuotaHasta,
+        faltante_rango: pagoParcialExigible
+          ? round2(totalRequerido - montoPagadoNum)
+          : 0
       };
     } else {
       const detalle = await calcularDetalleCuota(conn, {
@@ -1269,7 +1376,7 @@ exports.buscarPorCodigoLote = async (req, res) => {
       [contrato.id_cliente]
     );
 
-    const [[cuota]] = await conn.query(
+    const [cuotasPendientes] = await conn.query(
       `
       SELECT *
       FROM cuotas
@@ -1277,10 +1384,10 @@ exports.buscarPorCodigoLote = async (req, res) => {
         AND estado != 'pagada'
         AND capital_pendiente > 0
       ORDER BY numero_cuota
-      LIMIT 1
       `,
       [contrato.id_contrato]
     );
+    const cuota = cuotasPendientes[0];
 
     const limitesFecha = obtenerLimitesFechaContrato(contrato);
 
@@ -1299,12 +1406,36 @@ exports.buscarPorCodigoLote = async (req, res) => {
     }
 
     const fechaRef = fechaHoyYMD();
+    const cuotasExigibles = cuotasPendientes.filter((c) =>
+      cuotaVencidaALaFecha(c, fechaRef)
+    );
+
     const detalle = await calcularDetalleCuota(conn, {
       contrato,
       cuota,
       fechaAbonoYMD: fechaRef,
       aplicarMora: true
     });
+
+    let subtotalExigible = round2(detalle.capital_pendiente + detalle.interes_pendiente);
+    let moraGlobalExigible = round2(detalle.mora_pendiente);
+    let totalSugerido = round2(detalle.total);
+    let interesGlobalExigible = round2(detalle.interes_pendiente);
+    let capitalGlobalExigible = round2(detalle.capital_pendiente);
+
+    if (cuotasExigibles.length > 1) {
+      const planExigible = await construirPlanPagoExigible(conn, {
+        contrato,
+        cuotasExigibles,
+        fechaAbonoYMD: fechaRef
+      });
+
+      capitalGlobalExigible = round2(planExigible.total_capital);
+      interesGlobalExigible = round2(planExigible.total_interes);
+      subtotalExigible = round2(capitalGlobalExigible + interesGlobalExigible);
+      moraGlobalExigible = round2(planExigible.mora_global);
+      totalSugerido = round2(planExigible.total_requerido);
+    }
 
     return res.json({
       cliente,
@@ -1324,7 +1455,20 @@ exports.buscarPorCodigoLote = async (req, res) => {
         cuota.fecha_vencimiento
       ),
       total: detalle.total,
-      total_pagar: detalle.total,
+      total_pagar: totalSugerido,
+      requiere_pago_masivo: cuotasExigibles.length > 1,
+      cuota_desde_requerida: cuotasExigibles.length > 1
+        ? Number(cuotasExigibles[0].numero_cuota)
+        : null,
+      cuota_hasta_requerida: cuotasExigibles.length > 1
+        ? Number(cuotasExigibles[cuotasExigibles.length - 1].numero_cuota)
+        : null,
+      cuotas_exigibles: cuotasExigibles.length,
+      capital_global_exigible: capitalGlobalExigible,
+      interes_global_exigible: interesGlobalExigible,
+      total_cuotas_exigibles: subtotalExigible,
+      mora_global_exigible: moraGlobalExigible,
+      total_sugerido_pago_unico: totalSugerido,
       limites_fecha_abono: {
         min: limitesFecha.fechaInicio,
         max: limitesFecha.fechaVencimiento

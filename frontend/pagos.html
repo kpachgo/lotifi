@@ -275,11 +275,14 @@
     <div class="card pg-card">
       <div class="card-body">
         <span class="pg-section">Estado de Cuenta</span>
+        <div id="estadoCuentaLeyenda" class="form-text mb-2">
+          El campo # muestra la cuota o rango exigible segun la fecha de abono.
+        </div>
         <div class="pg-table-wrap">
           <table class="table table-bordered table-sm">
             <thead>
               <tr>
-                <th>#</th>
+                <th>Cuota/Rango</th>
                 <th>Vence</th>
                 <th>Cuota</th>
                 <th>Cargos</th>
@@ -300,8 +303,11 @@
 
         <div class="row mb-3 g-3">
           <div class="col-md-3">
-            <label class="form-label">Cuota No.</label>
+            <label class="form-label">Cuota/Rango Exigible</label>
             <input id="pagoNumeroCuota" type="text" class="form-control" disabled>
+            <div id="pagoDetalleRango" class="form-text">
+              Se muestra la cuota pendiente actual o el rango exigible por fecha.
+            </div>
           </div>
 
           <div class="col-md-3">
