@@ -38,3 +38,20 @@ exports.crear = async (req, res) => {
     res.status(500).json({ error: 'Error al crear polígono' });
   }
 };
+
+// ACTUALIZAR POLIGONO
+exports.actualizar = async (req, res) => {
+  try {
+    const { nombre } = req.body;
+
+    await db.query(
+      'UPDATE poligonos SET nombre_poligono = ? WHERE id_poligono = ?',
+      [nombre, req.params.id]
+    );
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('ERROR ACTUALIZAR POLIGONO:', error);
+    res.status(500).json({ error: 'Error al actualizar polígono' });
+  }
+};

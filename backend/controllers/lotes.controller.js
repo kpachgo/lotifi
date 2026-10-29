@@ -118,3 +118,52 @@ exports.obtenerPorId = async (req, res) => {
   }
 };
 
+// ACTUALIZAR LOTE
+exports.actualizar = async (req, res) => {
+  try {
+    let {
+      numero_lote,
+      area,
+      unidad_area,
+      precio_base,
+      precio,
+      estado
+    } = req.body;
+
+    if (precio === '' || precio === undefined) {
+      precio = null;
+    }
+
+    const [[lote]] = await db.query(
+      `SELECT l.estado, COUNT(c.id_contrato) AS contratos
+       FROM lotes l
+       LEFT JOIN contratos c ON c.id_lote = l.id_lote
+       WHERE l.id_lote = ?
+       GROUP BY l.id_lote`,
+      [req.params.id]
+    );
+
+    if (!lote) {
+      return res.status(404).json({ error: 'Lote no encontrado' });
+    }
+
+    // Con contrato, el estado lo manejan contratos y pagos
+    if (lote.contratos > 0 && estado !== lote.estado) {
+      return res.status(409).json({
+        error: 'El lote tiene contrato: su estado no se puede cambiar a mano'
+      });
+    }
+
+    await db.query(
+      `UPDATE lotes SET
+        numero_lote=?, area=?, unidad_area=?, precio_base=?, precio=?, estado=?
+       WHERE id_lote = ?`,
+      [numero_lote, area, unidad_area, precio_base, precio, estado, req.params.id]
+    );
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('ERROR ACTUALIZAR LOTE:', error);
+    res.status(500).json({ error: 'Error al actualizar lote' });
+  }
+};

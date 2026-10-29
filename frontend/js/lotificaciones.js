@@ -2,6 +2,29 @@ const API_LOTIFICACIONES = 'http://localhost:3000/api/lotificaciones';
 let lotificacionesCache = [];
 let lotificacionActual = null;
 let poligonoActual = null;
+let lotificacionEditando = null;
+let poligonoEditando = null;
+let loteEditando = null;
+let poligonosCache = [];
+const lotesCache = {};
+
+// Al cerrar un modal se sale del modo edicion
+[
+  ['modalLotificacion', 'formLotificacion', 'Nueva Lotificacion', () => { lotificacionEditando = null; }],
+  ['modalPoligono', 'formPoligono', 'Nuevo Poligono', () => { poligonoEditando = null; }],
+  ['modalLote', 'formLote', 'Nuevo Lote', () => { loteEditando = null; }]
+].forEach(([idModal, idForm, titulo, limpiar]) => {
+  document.getElementById(idModal).addEventListener('hidden.bs.modal', () => {
+    document.getElementById(idForm).reset();
+    document.querySelector(`#${idModal} .modal-title`).textContent = titulo;
+    limpiar();
+  });
+});
+
+function abrirModalEdicion(idModal, titulo) {
+  document.querySelector(`#${idModal} .modal-title`).textContent = titulo;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById(idModal)).show();
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   cargarLotificaciones();
@@ -29,15 +52,22 @@ async function guardarLotificacion() {
   };
 
   try {
-    const res = await fetch(API_LOTIFICACIONES, {
-      method: 'POST',
+    const url = lotificacionEditando
+      ? `${API_LOTIFICACIONES}/${lotificacionEditando}`
+      : API_LOTIFICACIONES;
+
+    const res = await fetch(url, {
+      method: lotificacionEditando ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
 
     if (!res.ok) throw new Error('Error al guardar');
 
-    mostrarMensajeLotificacion('Lotificación guardada correctamente', 'success');
+    mostrarMensajeLotificacion(
+      lotificacionEditando ? 'Lotificación actualizada correctamente' : 'Lotificación guardada correctamente',
+      'success'
+    );
     form.reset();
 
     const modal = bootstrap.Modal.getInstance(
@@ -56,14 +86,23 @@ document.getElementById('formPoligono').addEventListener('submit', async e => {
 
   const nombre = document.getElementById('nombrePoligono').value.trim();
 
-  await fetch('http://localhost:3000/api/poligonos', {
-    method: 'POST',
+  const url = poligonoEditando
+    ? `http://localhost:3000/api/poligonos/${poligonoEditando}`
+    : 'http://localhost:3000/api/poligonos';
+
+  const res = await fetch(url, {
+    method: poligonoEditando ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       id_lotificacion: lotificacionActual,
       nombre
     })
   });
+
+  if (!res.ok) {
+    alert('Error al guardar polígono');
+    return;
+  }
 
   document.getElementById('formPoligono').reset();
   bootstrap.Modal.getInstance(document.getElementById('modalPoligono')).hide();
@@ -87,6 +126,7 @@ async function cargarLotificaciones() {
 function renderPoligonos(poligonos) {
   const cont = document.getElementById('accordionPoligonos');
   cont.innerHTML = '';
+  poligonosCache = Array.isArray(poligonos) ? poligonos : [];
 
   if (!Array.isArray(poligonos) || poligonos.length === 0) {
     cont.innerHTML = '<em class="text-muted">Sin polígonos registrados</em>';
@@ -109,10 +149,16 @@ function renderPoligonos(poligonos) {
 
             <div class="d-flex justify-content-between mb-2">
               <strong>Lotes</strong>
-              <button class="btn btn-sm btn-success"
-                onclick="abrirModalLote(${p.id_poligono})">
-                Nuevo Lote
-              </button>
+              <div>
+                <button class="btn btn-sm btn-outline-primary"
+                  onclick="editarPoligono(${p.id_poligono})">
+                  Editar Polígono
+                </button>
+                <button class="btn btn-sm btn-success"
+                  onclick="abrirModalLote(${p.id_poligono})">
+                  Nuevo Lote
+                </button>
+              </div>
             </div>
 
             <div id="lotesPoligono${p.id_poligono}">
@@ -154,6 +200,10 @@ function renderLotificaciones(lots) {
             data-bs-target="#modalDetalleLotificacion">
             Ver
           </button>
+          <button class="btn btn-sm btn-outline-primary"
+            onclick="editarLotificacion(${l.id_lotificacion})">
+            Editar
+          </button>
         </td>
       </tr>
     `;
@@ -172,6 +222,41 @@ async function verDetalleLotificacion(id) {
 
   cargarPoligonos(id);
 }
+function editarLotificacion(id) {
+  const l = lotificacionesCache.find(x => x.id_lotificacion === id);
+  if (!l) return;
+
+  document.getElementById('nombreLot').value = l.nombre || '';
+  document.getElementById('ubicacionLot').value = l.ubicacion || '';
+  document.getElementById('descripcionLot').value = l.descripcion || '';
+  lotificacionEditando = id;
+  abrirModalEdicion('modalLotificacion', 'Editar Lotificacion');
+}
+
+function editarPoligono(id) {
+  const p = poligonosCache.find(x => x.id_poligono === id);
+  if (!p) return;
+
+  document.getElementById('nombrePoligono').value = p.nombre || '';
+  poligonoEditando = id;
+  abrirModalEdicion('modalPoligono', 'Editar Poligono');
+}
+
+function editarLote(idPoligono, idLote) {
+  const l = (lotesCache[idPoligono] || []).find(x => x.id_lote === idLote);
+  if (!l) return;
+
+  document.getElementById('numeroLote').value = l.numero_lote;
+  document.getElementById('areaLote').value = l.area ?? '';
+  document.getElementById('unidadArea').value = l.unidad_area || 'v2';
+  document.getElementById('precioBase').value = l.precio_base ?? '';
+  document.getElementById('precioFinal').value = l.precio ?? '';
+  document.getElementById('estadoLote').value = l.estado;
+  poligonoActual = idPoligono;
+  loteEditando = idLote;
+  abrirModalEdicion('modalLote', `Editar Lote ${l.numero_lote}`);
+}
+
 function mostrarMensajeLotificacion(texto, tipo) {
   const div = document.getElementById('mensajeLotificacion');
   if (!div) return;
@@ -197,7 +282,7 @@ function abrirModalLote(idPoligono) {
 function renderLotes(idPoligono, lotes) {
   const cont = document.getElementById(`lotesPoligono${idPoligono}`);
   cont.innerHTML = '';
-  console.log('LOTES:', lotes);
+  lotesCache[idPoligono] = Array.isArray(lotes) ? lotes : [];
 
   if (!Array.isArray(lotes) || lotes.length === 0) {
     cont.innerHTML = '<em class="text-muted">Sin lotes</em>';
@@ -214,6 +299,7 @@ function renderLotes(idPoligono, lotes) {
           <th>Precio base</th>
           <th>Precio final</th>
           <th>Estado</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -233,6 +319,12 @@ function renderLotes(idPoligono, lotes) {
               <span class="badge bg-${estadoColor(l.estado)}">
                 ${l.estado}
               </span>
+            </td>
+            <td>
+              <button class="btn btn-sm btn-outline-primary"
+                onclick="editarLote(${idPoligono}, ${l.id_lote})">
+                Editar
+              </button>
             </td>
           </tr>
         `).join('')}
@@ -254,11 +346,21 @@ document.getElementById('formLote').addEventListener('submit', async e => {
     estado: document.getElementById('estadoLote').value
   };
 
-  await fetch('http://localhost:3000/api/lotes', {
-    method: 'POST',
+  const url = loteEditando
+    ? `http://localhost:3000/api/lotes/${loteEditando}`
+    : 'http://localhost:3000/api/lotes';
+
+  const res = await fetch(url, {
+    method: loteEditando ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.error || 'Error al guardar lote');
+    return;
+  }
 
   document.getElementById('formLote').reset();
   bootstrap.Modal.getInstance(document.getElementById('modalLote')).hide();
@@ -273,7 +375,7 @@ async function cargarLotes(idPoligono) {
 }
 function estadoColor(estado) {
   if (estado === 'disponible') return 'success';
-  if (estado === 'reservado') return 'warning';
+  if (estado === 'promesa_venta') return 'warning';
   return 'danger';
 }
 

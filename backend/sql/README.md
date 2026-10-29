@@ -4,6 +4,7 @@ Archivos:
 - `backend/sql/01_schema_lotifi.sql`: esquema base completo alineado al codigo actual.
 - `backend/sql/02_reset_tablas.sql`: limpia datos para pruebas (mantiene estructura).
 - `backend/sql/03_migracion_alter_motor_financiero.sql`: migra una BD existente con `ALTER TABLE` (sin borrar datos).
+- `backend/sql/04_migracion_anular_pagos.sql`: agrega `pagos.id_movimiento` y la bitacora `pagos_anulados` (necesaria para "Anular ultimo pago").
 
 Uso rapido:
 1. Crear estructura: ejecutar `01_schema_lotifi.sql`.

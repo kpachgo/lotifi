@@ -158,7 +158,13 @@ exports.obtenerContratoDetalle = async (req, res) => {
         p.nombre_poligono AS poligono,
         l.numero_lote,
         co.plazo_meses,
-        co.estado
+        co.estado,
+        co.id_cliente,
+        DATE_FORMAT(co.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+        co.dias_gracia,
+        (SELECT COUNT(*) FROM pagos pa
+          JOIN cuotas cu ON cu.id_cuota = pa.id_cuota
+          WHERE cu.id_contrato = co.id_contrato) AS total_pagos
       FROM contratos co
       JOIN cliente c ON co.id_cliente = c.id_cliente
       JOIN lotes l ON co.id_lote = l.id_lote
@@ -361,6 +367,99 @@ exports.crearContrato = async (req, res) => {
     await conn.rollback();
     console.error(error);
     res.status(500).json({ error: 'Error al crear contrato' });
+  } finally {
+    conn.release();
+  }
+};
+
+// EDITAR CONTRATO (solo datos no financieros: cliente, fecha de inicio, dias de gracia)
+exports.actualizarContrato = async (req, res) => {
+  const conn = await db.getConnection();
+
+  try {
+    const { id_cliente, fecha_inicio, dias_gracia } = req.body;
+    const diasGraciaNum = Number(dias_gracia || 0);
+
+    if (!id_cliente || !/^\d{4}-\d{2}-\d{2}$/.test(String(fecha_inicio || ''))) {
+      return res.status(400).json({ error: 'Datos incompletos' });
+    }
+
+    if (!Number.isInteger(diasGraciaNum) || diasGraciaNum < 0) {
+      return res.status(400).json({ error: 'Dias de gracia invalidos' });
+    }
+
+    await conn.beginTransaction();
+
+    const [[contrato]] = await conn.query(
+      `SELECT id_contrato, plazo_meses,
+              DATE_FORMAT(fecha_inicio, '%Y-%m-%d') AS fecha_inicio
+       FROM contratos WHERE id_contrato = ? FOR UPDATE`,
+      [req.params.id]
+    );
+
+    if (!contrato) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Contrato no encontrado' });
+    }
+
+    const [[cliente]] = await conn.query(
+      'SELECT id_cliente FROM cliente WHERE id_cliente = ?',
+      [id_cliente]
+    );
+
+    if (!cliente) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+
+    if (fecha_inicio !== contrato.fecha_inicio) {
+      // Las fechas de cuotas, mora e interes dependen de esta fecha
+      const [[{ total }]] = await conn.query(
+        `SELECT COUNT(*) AS total FROM pagos p
+         JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+         WHERE cu.id_contrato = ?`,
+        [contrato.id_contrato]
+      );
+
+      if (total > 0) {
+        await conn.rollback();
+        return res.status(409).json({
+          error: 'El contrato ya tiene pagos: la fecha de inicio no se puede cambiar'
+        });
+      }
+
+      const [cuotas] = await conn.query(
+        'SELECT id_cuota, numero_cuota FROM cuotas WHERE id_contrato = ?',
+        [contrato.id_contrato]
+      );
+
+      for (const cuota of cuotas) {
+        await conn.query(
+          'UPDATE cuotas SET fecha_vencimiento = ? WHERE id_cuota = ?',
+          [sumarMesesISO(fecha_inicio, Number(cuota.numero_cuota)), cuota.id_cuota]
+        );
+      }
+    }
+
+    await conn.query(
+      `UPDATE contratos SET
+        id_cliente = ?, fecha_inicio = ?, fecha_vencimiento = ?, dias_gracia = ?
+       WHERE id_contrato = ?`,
+      [
+        id_cliente,
+        fecha_inicio,
+        sumarMesesISO(fecha_inicio, Number(contrato.plazo_meses)),
+        diasGraciaNum,
+        contrato.id_contrato
+      ]
+    );
+
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (error) {
+    await conn.rollback();
+    console.error('ERROR ACTUALIZAR CONTRATO:', error);
+    res.status(500).json({ error: 'Error al actualizar contrato' });
   } finally {
     conn.release();
   }

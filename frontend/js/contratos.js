@@ -79,6 +79,12 @@ async function verContratos(idCliente) {
           <td>
             <span class="badge bg-success">${c.estado}</span>
           </td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary"
+              onclick="abrirEditarContrato(${c.id_contrato}, ${idCliente})">
+              Editar
+            </button>
+          </td>
         </tr>
       `;
     });
@@ -87,6 +93,62 @@ async function verContratos(idCliente) {
       document.getElementById('modalContratos')
     ).show();
 }
+// EDITAR CONTRATO (solo cliente, fecha de inicio y dias de gracia)
+async function abrirEditarContrato(idContrato, idClienteOrigen) {
+    const [contrato, clientes] = await Promise.all([
+      fetch(`${API_CONTRATOS}/detalle/${idContrato}`).then(r => r.json()),
+      fetch('http://localhost:3000/api/cliente').then(r => r.json())
+    ]);
+
+    const select = document.getElementById('editContratoCliente');
+    select.innerHTML = clientes.map(c => `
+      <option value="${c.id_cliente}">${c.nombres} ${c.apellidos || ''} - ${c.dui || ''}</option>
+    `).join('');
+    select.value = contrato.id_cliente;
+
+    const fecha = document.getElementById('editContratoFecha');
+    fecha.value = contrato.fecha_inicio;
+    fecha.disabled = contrato.total_pagos > 0;
+    document.getElementById('editContratoFechaAviso').textContent = fecha.disabled
+      ? 'El contrato ya tiene pagos: la fecha de inicio no se puede cambiar.'
+      : 'Al cambiarla se recalculan las fechas de vencimiento de las cuotas.';
+
+    document.getElementById('editContratoGracia').value = contrato.dias_gracia ?? 0;
+    document.getElementById('editContratoId').textContent = idContrato;
+
+    const form = document.getElementById('formEditarContrato');
+    form.dataset.idContrato = idContrato;
+    form.dataset.idClienteOrigen = idClienteOrigen;
+
+    bootstrap.Modal.getInstance(document.getElementById('modalContratos'))?.hide();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modalEditarContrato')).show();
+}
+
+document.getElementById('formEditarContrato').addEventListener('submit', async e => {
+    e.preventDefault();
+    const form = e.target;
+
+    const res = await fetch(`${API_CONTRATOS}/${form.dataset.idContrato}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id_cliente: document.getElementById('editContratoCliente').value,
+        fecha_inicio: document.getElementById('editContratoFecha').value,
+        dias_gracia: Number(document.getElementById('editContratoGracia').value)
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || 'Error al actualizar contrato');
+      return;
+    }
+
+    bootstrap.Modal.getInstance(document.getElementById('modalEditarContrato')).hide();
+    alert('Contrato actualizado');
+    verContratos(form.dataset.idClienteOrigen);
+});
+
 function seleccionarCliente(idCliente, nombreCompleto) {
     // guardar ID
     document.getElementById('idClienteSeleccionado').value = idCliente;

@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS cuotas (
 
 CREATE TABLE IF NOT EXISTS pagos (
   id_pago INT NOT NULL AUTO_INCREMENT,
+  id_movimiento INT DEFAULT NULL,
   id_cuota INT NOT NULL,
   fecha_abono DATE NOT NULL,
   fecha_recibo DATE NOT NULL,
@@ -123,8 +124,24 @@ CREATE TABLE IF NOT EXISTS pagos (
   PRIMARY KEY (id_pago),
   KEY idx_pagos_cuota (id_cuota),
   KEY idx_pagos_fecha_abono (fecha_abono),
+  KEY idx_pagos_movimiento (id_movimiento),
   CONSTRAINT fk_pagos_cuota
     FOREIGN KEY (id_cuota) REFERENCES cuotas (id_cuota)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS pagos_anulados (
+  id_anulacion INT NOT NULL AUTO_INCREMENT,
+  id_contrato INT NOT NULL,
+  id_movimiento INT NOT NULL,
+  monto_total DECIMAL(10,2) NOT NULL,
+  abono_capital DECIMAL(10,2) NOT NULL,
+  motivo VARCHAR(255) NOT NULL,
+  detalle JSON NOT NULL,
+  fecha_anulacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_anulacion),
+  KEY idx_pagos_anulados_contrato (id_contrato),
+  CONSTRAINT fk_pagos_anulados_contrato
+    FOREIGN KEY (id_contrato) REFERENCES contratos (id_contrato)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS documentos (

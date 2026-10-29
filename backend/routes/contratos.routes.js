@@ -14,4 +14,7 @@ router.get('/detalle/:id', contratosController.obtenerContratoDetalle);
 // Crear contrato
 router.post('/', contratosController.crearContrato);
 
+// Editar datos no financieros
+router.put('/:id', contratosController.actualizarContrato);
+
 module.exports = router;

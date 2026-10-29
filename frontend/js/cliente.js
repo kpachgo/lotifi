@@ -1,6 +1,7 @@
 const API_CLIENTE = 'http://localhost:3000/api/cliente';
 let clientesCache = [];
 let clientesFiltrados = [];
+let clienteEditando = null;
 let paginaActual = 1;
 const pageSize = 20;
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault(); // ⛔ evita recargar página
     guardarCliente();
   });
+  form.addEventListener('reset', () => salirEdicionCliente());
   const buscador = document.getElementById('buscadorCliente');
   if (buscador) {
   buscador.addEventListener('input', filtrarClientes);
@@ -34,8 +36,10 @@ function guardarCliente() {
     direccion: document.getElementById('direccion').value.trim()
   };
 
-  fetch(API_CLIENTE, {
-    method: 'POST',
+  const url = clienteEditando ? `${API_CLIENTE}/${clienteEditando}` : API_CLIENTE;
+
+  fetch(url, {
+    method: clienteEditando ? 'PUT' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   })
@@ -44,7 +48,10 @@ function guardarCliente() {
       return res.text(); // 🔑 NO json()
     })
     .then(() => {
-      mostrarMensaje('Cliente guardado correctamente', 'success');
+      mostrarMensaje(
+        clienteEditando ? 'Cliente actualizado correctamente' : 'Cliente guardado correctamente',
+        'success'
+      );
       form.reset();
       cargarClientes();
     })
@@ -85,11 +92,34 @@ function renderClientes(clientes) {
         <td>${c.nombres} ${c.apellidos}</td>
         <td>${c.dui || ''}</td>
         <td>${c.telefono || ''}</td>
-        <td></td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary"
+            onclick="editarCliente(${c.id_cliente})">
+            Editar
+          </button>
+        </td>
       </tr>
     `;
   });
 }
+function editarCliente(id) {
+  const c = clientesCache.find(x => x.id_cliente === id);
+  if (!c) return;
+
+  ['nombres', 'apellidos', 'dui', 'nit', 'telefono', 'direccion'].forEach(campo => {
+    document.getElementById(campo).value = c[campo] || '';
+  });
+
+  clienteEditando = id;
+  document.querySelector('#formCliente button[type="submit"]').textContent = 'Actualizar Cliente';
+  document.getElementById('formCliente').scrollIntoView({ behavior: 'smooth' });
+}
+
+function salirEdicionCliente() {
+  clienteEditando = null;
+  document.querySelector('#formCliente button[type="submit"]').textContent = 'Guardar Cliente';
+}
+
 function renderClientesPaginado() {
   const inicio = (paginaActual - 1) * pageSize;
   const fin = inicio + pageSize;

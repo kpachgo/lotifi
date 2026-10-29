@@ -441,11 +441,47 @@
                 <th>Precio</th>
                 <th>Plazo</th>
                 <th>Estado</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="tablaContratosModal"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="modalEditarContrato">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Editar Contrato #<span id="editContratoId"></span></h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="formEditarContrato">
+          <div class="modal-body">
+            <p class="text-muted small">
+              Montos, plazo y tasa no se editan: de ellos dependen las cuotas y los pagos.
+            </p>
+            <div class="mb-3">
+              <label class="form-label">Cliente</label>
+              <select class="form-select" id="editContratoCliente" required></select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Fecha de inicio</label>
+              <input type="date" class="form-control" id="editContratoFecha" required>
+              <div class="form-text" id="editContratoFechaAviso"></div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Dias de gracia</label>
+              <input type="number" class="form-control" id="editContratoGracia" min="0" step="1" required>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-primary">Guardar</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>

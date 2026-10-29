@@ -7,6 +7,8 @@ router.post('/', pagosController.registrarPago);
 router.post('/masivo', pagosController.registrarPagoMasivo);
 router.post('/por-codigo', pagosController.buscarPorCodigoLote);
 router.get('/contrato/:id', pagosController.pagosPorContrato);
+router.get('/ultimo/:idContrato', pagosController.ultimoPago);
+router.post('/anular-ultimo/:idContrato', pagosController.anularUltimoPago);
 
 module.exports = router;
 
