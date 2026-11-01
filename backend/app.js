@@ -49,14 +49,17 @@ app.use('/uploads', express.static('backend/uploads'));
 const recibosRoutes = require('./routes/recibos.routes');
 app.use('/api/recibos', recibosRoutes);
 
-// =======================
-// 🔹 FRONTEND AL FINAL
-// =======================
+const frontendBuild = path.join(__dirname, 'public');
+
+// React build takes precedence; the existing static views remain available during migration.
+app.use(express.static(frontendBuild));
 app.use(express.static(path.join(__dirname, '../frontend')));
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return next();
+  res.sendFile(path.join(frontendBuild, 'index.html'), error => {
+    if (error) next(error);
+  });
 });
 
 module.exports = app;
-

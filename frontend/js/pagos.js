@@ -1,4 +1,4 @@
-const API_CONTRATOS = 'http://localhost:3000/api/contratos';
+const API_CONTRATOS = 'http://localhost:3002/api/contratos';
 let contextoCalculoPago = null;
 
 function parseFechaISOaLocal(fechaISO) {
@@ -151,7 +151,7 @@ async function seleccionarContratoPago(idContrato) {
   try {
 
     const res = await fetch(
-      `http://localhost:3000/api/pagos/estado/${idContrato}`
+      `http://localhost:3002/api/pagos/estado/${idContrato}`
     );
 
     if (!res.ok) {
@@ -446,7 +446,7 @@ async function buscarPorCodigoLote() {
   try {
 
     const res = await fetch(
-      'http://localhost:3000/api/pagos/por-codigo',
+      'http://localhost:3002/api/pagos/por-codigo',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -500,7 +500,7 @@ async function subirComprobante(idPago) {
 
   try {
     const res = await fetch(
-      'http://localhost:3000/api/documentos/comprobante',
+      'http://localhost:3002/api/documentos/comprobante',
       {
         method: 'POST',
         body: formData
@@ -538,7 +538,7 @@ async function subirComprobante(idPago) {
 }
 async function verComprobante(idPago) {
   const res = await fetch(
-    `http://localhost:3000/api/documentos/comprobante/${idPago}`
+    `http://localhost:3002/api/documentos/comprobante/${idPago}`
   );
 
   const doc = await res.json();
@@ -551,7 +551,7 @@ async function verComprobante(idPago) {
   const img = document.getElementById('previewComprobante');
   const placeholder = document.getElementById('previewPlaceholder');
 
-  img.src = `http://localhost:3000/${doc.ruta_archivo}`;
+  img.src = `http://localhost:3002/${doc.ruta_archivo}`;
   img.classList.remove('d-none');
   placeholder.classList.add('d-none');
 
@@ -624,7 +624,7 @@ const data = {
 
     try {
 
-      const res = await fetch('http://localhost:3000/api/pagos', {
+      const res = await fetch('http://localhost:3002/api/pagos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -812,7 +812,7 @@ if (inputFechaAbono) {
 
     try {
       const res = await fetch(
-        `http://localhost:3000/api/pagos/estado/${idContrato}?fecha_abono=${encodeURIComponent(fechaAbono)}`
+        `http://localhost:3002/api/pagos/estado/${idContrato}?fecha_abono=${encodeURIComponent(fechaAbono)}`
       );
       const data = await res.json();
 
@@ -977,7 +977,7 @@ if (formPagoMasivo) {
     btn.innerText = 'Procesando...';
 
     try {
-      const res = await fetch('http://localhost:3000/api/pagos/masivo', {
+      const res = await fetch('http://localhost:3002/api/pagos/masivo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1024,7 +1024,6 @@ if (formPagoMasivo) {
       }
     });
 }
-
 
 
 
