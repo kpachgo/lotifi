@@ -1,4 +1,4 @@
-const API_LOTIFICACIONES = 'http://localhost:3000/api/lotificaciones';
+const API_LOTIFICACIONES = 'http://localhost:3002/api/lotificaciones';
 let lotificacionesCache = [];
 let lotificacionActual = null;
 let poligonoActual = null;
@@ -56,7 +56,7 @@ document.getElementById('formPoligono').addEventListener('submit', async e => {
 
   const nombre = document.getElementById('nombrePoligono').value.trim();
 
-  await fetch('http://localhost:3000/api/poligonos', {
+  await fetch('http://localhost:3002/api/poligonos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -131,7 +131,7 @@ function renderPoligonos(poligonos) {
 
 
 async function cargarPoligonos(idLotificacion) {
-  const res = await fetch(`http://localhost:3000/api/poligonos/lotificacion/${idLotificacion}`);
+  const res = await fetch(`http://localhost:3002/api/poligonos/lotificacion/${idLotificacion}`);
   const poligonos = await res.json();
 
   renderPoligonos(poligonos);
@@ -254,7 +254,7 @@ document.getElementById('formLote').addEventListener('submit', async e => {
     estado: document.getElementById('estadoLote').value
   };
 
-  await fetch('http://localhost:3000/api/lotes', {
+  await fetch('http://localhost:3002/api/lotes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -266,7 +266,7 @@ document.getElementById('formLote').addEventListener('submit', async e => {
   cargarLotes(poligonoActual);
 });
 async function cargarLotes(idPoligono) {
-  const res = await fetch(`http://localhost:3000/api/lotes/poligono/${idPoligono}`);
+  const res = await fetch(`http://localhost:3002/api/lotes/poligono/${idPoligono}`);
   const lotes = await res.json();
 
   renderLotes(idPoligono, lotes);
@@ -276,4 +276,3 @@ function estadoColor(estado) {
   if (estado === 'reservado') return 'warning';
   return 'danger';
 }
-

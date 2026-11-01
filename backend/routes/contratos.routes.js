@@ -10,6 +10,7 @@ router.get('/cliente/:id', contratosController.contratosPorCliente);
 
 // 🔥 DETALLE DE CONTRATO (ESTA FALTABA / ESTABA MAL)
 router.get('/detalle/:id', contratosController.obtenerContratoDetalle);
+router.get('/lote/:id', contratosController.contratoPorLote);
 
 // Crear contrato
 router.post('/', contratosController.crearContrato);

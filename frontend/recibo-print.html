@@ -97,7 +97,7 @@ const idPago = params.get('id_pago');
 if (!idPago) {
   alert('Falta id_pago');
 }
-fetch(`http://localhost:3000/api/recibos/pago/${idPago}`)
+fetch(`http://localhost:3002/api/recibos/pago/${idPago}`)
   .then(res => res.json())
   .then(data => {
     // CLIENTE

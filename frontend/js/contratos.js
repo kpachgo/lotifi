@@ -1,4 +1,4 @@
-  const API_CONTRATOS = 'http://localhost:3000/api/contratos';
+  const API_CONTRATOS = 'http://localhost:3002/api/contratos';
   let lotificacionSeleccionada = null;
   let poligonoSeleccionado = null;
   let loteSeleccionado = null;
@@ -102,7 +102,7 @@ function seleccionarCliente(idCliente, nombreCompleto) {
       .scrollIntoView({ behavior: 'smooth' });
 }
 async function cargarLotificacionesContrato() {
-    const res = await fetch('http://localhost:3000/api/lotificaciones');
+    const res = await fetch('http://localhost:3002/api/lotificaciones');
     const data = await res.json();
 
     const select = document.getElementById('selectLotificacion');
@@ -205,7 +205,7 @@ async function onLotificacionChange(e) {
     if (!id) return;
 
     const res = await fetch(
-      `http://localhost:3000/api/poligonos/lotificacion/${id}`
+      `http://localhost:3002/api/poligonos/lotificacion/${id}`
     );
     const poligonos = await res.json();
 
@@ -235,7 +235,7 @@ async function onPoligonoChange(e) {
     if (!id) return;
 
     const res = await fetch(
-      `http://localhost:3000/api/lotes/disponibles/${id}`
+      `http://localhost:3002/api/lotes/disponibles/${id}`
     );
     const lotes = await res.json();
 
@@ -397,7 +397,7 @@ document.getElementById('prima')
       }
 
       try {
-        const res = await fetch('http://localhost:3000/api/contratos', {
+        const res = await fetch('http://localhost:3002/api/contratos', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
@@ -430,7 +430,6 @@ document.getElementById('prima')
     });
 
 });
-
 
 
 

@@ -180,6 +180,47 @@ exports.obtenerContratoDetalle = async (req, res) => {
     res.status(500).json({ message: 'Error al obtener contrato' });
   }
 };
+exports.contratoPorLote = async (req, res) => {
+  try {
+    const [[contrato]] = await db.query(
+      `SELECT
+        co.id_contrato,
+        co.id_cliente,
+        CONCAT(c.nombres, ' ', c.apellidos) AS cliente,
+        c.dui,
+        lo.nombre AS lotificacion,
+        p.nombre_poligono AS poligono,
+        l.id_lote,
+        l.numero_lote,
+        co.fecha_inicio,
+        co.fecha_vencimiento,
+        co.precio_total,
+        co.prima,
+        co.plazo_meses,
+        co.cuota,
+        co.estado
+       FROM contratos co
+       JOIN cliente c ON c.id_cliente = co.id_cliente
+       JOIN lotes l ON l.id_lote = co.id_lote
+       JOIN poligonos p ON p.id_poligono = l.id_poligono
+       JOIN lotificaciones lo ON lo.id_lotificacion = p.id_lotificacion
+       WHERE co.id_lote = ?
+       ORDER BY CASE WHEN co.estado = 'activo' THEN 0 ELSE 1 END, co.id_contrato DESC
+       LIMIT 1`,
+      [req.params.id]
+    );
+
+    if (!contrato) {
+      return res.status(404).json({ message: 'No hay contratos registrados para este lote.' });
+    }
+
+    res.json(contrato);
+  } catch (error) {
+    console.error('Error al obtener contrato por lote:', error);
+    res.status(500).json({ message: 'Error al obtener contrato del lote.' });
+  }
+};
+
 exports.crearContrato = async (req, res) => {
   const conn = await db.getConnection();
 
@@ -365,7 +406,5 @@ exports.crearContrato = async (req, res) => {
     conn.release();
   }
 };
-
-
 
 

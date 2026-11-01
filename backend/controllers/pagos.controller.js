@@ -1012,6 +1012,433 @@ exports.registrarPago = async (req, res) => {
   }
 };
 
+exports.editarMontoUltimoPago = async (req, res) => {
+  const conn = await db.getConnection();
+  let transactionStarted = false;
+
+  try {
+    const montoInput = Number(String(req.body?.monto_pagado ?? '').replace(',', '.'));
+    if (!Number.isFinite(montoInput) || montoInput <= 0) {
+      return res.status(400).json({ error: 'Ingresa un monto válido mayor que cero.' });
+    }
+    const montoNuevo = round2(montoInput);
+
+    await conn.beginTransaction();
+    transactionStarted = true;
+
+    const [[pago]] = await conn.query(
+      `
+      SELECT
+        p.*,
+        cu.id_contrato,
+        cu.capital_pendiente AS capital_pendiente_cuota,
+        cu.fecha_vencimiento,
+        cu.numero_cuota
+      FROM pagos p
+      JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+      WHERE p.id_pago = ?
+      FOR UPDATE
+      `,
+      [req.params.id]
+    );
+
+    if (!pago) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(404).json({ error: 'Pago no encontrado.' });
+    }
+
+    const [[contrato]] = await conn.query(
+      'SELECT * FROM contratos WHERE id_contrato = ? FOR UPDATE',
+      [pago.id_contrato]
+    );
+    if (!contrato) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(404).json({ error: 'Contrato no encontrado.' });
+    }
+    const [[ultimoPago]] = await conn.query(
+      `
+      SELECT p.id_pago
+      FROM pagos p
+      JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+      WHERE cu.id_contrato = ?
+      ORDER BY p.id_pago DESC
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [pago.id_contrato]
+    );
+
+    if (Number(ultimoPago?.id_pago) !== Number(pago.id_pago)) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({ error: 'Solo se puede editar el pago más reciente del contrato.' });
+    }
+
+    await conn.query(
+      'SELECT * FROM cuotas WHERE id_contrato = ? ORDER BY numero_cuota FOR UPDATE',
+      [pago.id_contrato]
+    );
+    const capitalRestaurado = round2(
+      toNumber(pago.capital_pendiente_cuota) + toNumber(pago.abono_capital)
+    );
+    const saldoContratoRestaurado = round2(
+      toNumber(contrato.capital_pendiente) + toNumber(pago.abono_capital)
+    );
+    if (capitalRestaurado < 0 || saldoContratoRestaurado < 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({ error: 'No se pudo restaurar el saldo original para recalcular el pago.' });
+    }
+
+    await conn.query(
+      `
+      UPDATE cuotas
+      SET capital_pendiente = ?,
+          estado = ?
+      WHERE id_cuota = ?
+      `,
+      [
+        capitalRestaurado,
+        estadoCuotaSegunFecha(capitalRestaurado, normalizarFechaYMD(pago.fecha_abono), pago.fecha_vencimiento),
+        pago.id_cuota
+      ]
+    );
+    await conn.query(
+      `
+      UPDATE contratos
+      SET capital_pendiente = ?,
+          estado = CASE WHEN ? > 0 AND estado = 'cancelado' THEN 'activo' ELSE estado END
+      WHERE id_contrato = ?
+      `,
+      [saldoContratoRestaurado, saldoContratoRestaurado, pago.id_contrato]
+    );
+    await conn.query(
+      `
+      UPDATE pagos
+      SET monto_total = 0,
+          abono_capital = 0,
+          abono_interes = 0,
+          abono_mora = 0
+      WHERE id_pago = ?
+      `,
+      [pago.id_pago]
+    );
+
+    const [cuotasPendientes] = await conn.query(
+      `
+      SELECT *
+      FROM cuotas
+      WHERE id_contrato = ?
+        AND capital_pendiente > 0
+        AND estado != 'pagada'
+      ORDER BY numero_cuota
+      FOR UPDATE
+      `,
+      [pago.id_contrato]
+    );
+    if (!cuotasPendientes.length || Number(cuotasPendientes[0].id_cuota) !== Number(pago.id_cuota)) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({
+        error: 'No se puede recalcular este pago porque ya no corresponde a la primera cuota pendiente.'
+      });
+    }
+
+    const fechaAbonoYMD = normalizarFechaYMD(pago.fecha_abono);
+    const cuotasExigibles = cuotasPendientes.filter(cuota =>
+      cuotaVencidaALaFecha(cuota, fechaAbonoYMD)
+    );
+    let restante = montoNuevo;
+    let limiteCuotaExtras = Number(cuotasPendientes[0].numero_cuota);
+    const aplicaciones = [];
+
+    if (cuotasExigibles.length > 1) {
+      const plan = await construirPlanPagoExigible(conn, {
+        contrato: { ...contrato, capital_pendiente: saldoContratoRestaurado },
+        cuotasExigibles,
+        fechaAbonoYMD
+      });
+      const filasPlan = plan.plan_aplicacion.map(fila => ({
+        ...fila,
+        aplicado_mora: 0,
+        aplicado_interes: 0,
+        aplicado_capital: 0
+      }));
+      const aplicarMonto = (campo, campoAplicado) => {
+        for (const fila of filasPlan) {
+          if (restante <= 0) break;
+          const pendiente = round2(toNumber(fila[campo]) - toNumber(fila[campoAplicado]));
+          if (pendiente <= 0) continue;
+          const aplicado = round2(Math.min(restante, pendiente));
+          fila[campoAplicado] = round2(toNumber(fila[campoAplicado]) + aplicado);
+          restante = round2(restante - aplicado);
+        }
+      };
+
+      aplicarMonto('abono_mora', 'aplicado_mora');
+      aplicarMonto('abono_interes', 'aplicado_interes');
+      aplicarMonto('abono_capital', 'aplicado_capital');
+
+      for (const fila of filasPlan) {
+        const aplicacion = {
+          cuota: fila.cuota,
+          abono_capital: round2(fila.aplicado_capital),
+          abono_interes: round2(fila.aplicado_interes),
+          abono_mora: round2(fila.aplicado_mora)
+        };
+        if (aplicacion.abono_capital + aplicacion.abono_interes + aplicacion.abono_mora > 0) {
+          aplicaciones.push(aplicacion);
+          limiteCuotaExtras = Number(fila.cuota.numero_cuota);
+        }
+      }
+    } else {
+      const cuota = cuotasPendientes[0];
+      const detalle = await calcularDetalleCuota(conn, {
+        contrato: { ...contrato, capital_pendiente: saldoContratoRestaurado },
+        cuota,
+        fechaAbonoYMD,
+        aplicarMora: true,
+        saldoContratoBase: saldoContratoRestaurado
+      });
+      const abono_mora = round2(Math.min(restante, detalle.mora_pendiente));
+      restante = round2(restante - abono_mora);
+      const abono_interes = round2(Math.min(restante, detalle.interes_pendiente));
+      restante = round2(restante - abono_interes);
+      const abono_capital = round2(Math.min(restante, toNumber(cuota.capital_pendiente)));
+      restante = round2(restante - abono_capital);
+      if (abono_mora + abono_interes + abono_capital > 0) {
+        aplicaciones.push({ cuota, abono_capital, abono_interes, abono_mora });
+      }
+    }
+
+    let capitalContratoActual = saldoContratoRestaurado;
+    for (const cuotaFutura of cuotasPendientes) {
+      if (restante <= 0 || Number(cuotaFutura.numero_cuota) <= limiteCuotaExtras) continue;
+      const abono_capital = round2(Math.min(restante, toNumber(cuotaFutura.capital_pendiente)));
+      if (abono_capital <= 0) continue;
+      aplicaciones.push({ cuota: cuotaFutura, abono_capital, abono_interes: 0, abono_mora: 0, extra: true });
+      restante = round2(restante - abono_capital);
+    }
+
+    if (restante > 0.01 || !aplicaciones.length) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(400).json({
+        error: 'El nuevo monto no se puede aplicar completamente al saldo pendiente del contrato.'
+      });
+    }
+    if (aplicaciones.length > 1) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({
+        error: 'El nuevo monto se distribuiría entre varias cuotas. No se modificó el pago.'
+      });
+    }
+
+    const fechaReciboYMD = normalizarFechaYMD(pago.fecha_recibo) || fechaAbonoYMD;
+    const pagosRecalculados = [];
+    for (const [index, aplicacion] of aplicaciones.entries()) {
+      const { cuota, abono_capital, abono_interes, abono_mora } = aplicacion;
+      const totalAplicado = round2(abono_capital + abono_interes + abono_mora);
+      const capitalCuotaNuevo = round2(toNumber(cuota.capital_pendiente) - abono_capital);
+      await conn.query(
+        `
+        UPDATE cuotas
+        SET capital_pendiente = ?,
+            estado = ?
+        WHERE id_cuota = ?
+        `,
+        [
+          capitalCuotaNuevo,
+          estadoCuotaSegunFecha(capitalCuotaNuevo, fechaAbonoYMD, cuota.fecha_vencimiento),
+          cuota.id_cuota
+        ]
+      );
+
+      const numeroRecibo = index === 0
+        ? pago.numero_recibo
+        : pago.numero_recibo
+          ? `${pago.numero_recibo}${aplicacion.extra ? '-EX' : ''}-C${cuota.numero_cuota}`
+          : null;
+      if (index === 0) {
+        await conn.query(
+          `
+          UPDATE pagos
+          SET id_cuota = ?,
+              fecha_abono = ?,
+              fecha_recibo = ?,
+              forma_pago = ?,
+              banco = ?,
+              abono_capital = ?,
+              abono_interes = ?,
+              abono_mora = ?,
+              monto_total = ?,
+              numero_recibo = ?
+          WHERE id_pago = ?
+          `,
+          [
+            cuota.id_cuota,
+            fechaAbonoYMD,
+            fechaReciboYMD,
+            pago.forma_pago,
+            pago.banco,
+            abono_capital,
+            abono_interes,
+            abono_mora,
+            totalAplicado,
+            numeroRecibo,
+            pago.id_pago
+          ]
+        );
+      } else {
+        await conn.query(
+          `
+          INSERT INTO pagos
+          (id_cuota, fecha_abono, fecha_recibo, forma_pago, banco,
+           abono_capital, abono_interes, abono_mora, monto_total, numero_recibo)
+          VALUES (?,?,?,?,?,?,?,?,?,?)
+          `,
+          [
+            cuota.id_cuota,
+            fechaAbonoYMD,
+            fechaReciboYMD,
+            pago.forma_pago,
+            pago.banco,
+            abono_capital,
+            abono_interes,
+            abono_mora,
+            totalAplicado,
+            numeroRecibo
+          ]
+        );
+      }
+      pagosRecalculados.push({ id_cuota: cuota.id_cuota, monto_total: totalAplicado });
+      capitalContratoActual = round2(capitalContratoActual - abono_capital);
+    }
+
+    if (capitalContratoActual < 0) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({ error: 'El recálculo produjo un saldo inválido.' });
+    }
+    await actualizarContratoYLote(
+      conn,
+      { ...contrato, estado: capitalContratoActual > 0 ? 'activo' : contrato.estado },
+      capitalContratoActual
+    );
+    await conn.commit();
+    transactionStarted = false;
+    return res.json({
+      ok: true,
+      id_pago: pago.id_pago,
+      monto_pagado: montoNuevo,
+      pagos_recalculados: pagosRecalculados
+    });
+  } catch (error) {
+    if (transactionStarted) await conn.rollback();
+    console.error('Error al editar el monto del último pago:', error);
+    return res.status(500).json({ error: 'No se pudo editar el monto del último pago.' });
+  } finally {
+    conn.release();
+  }
+};
+
+exports.eliminarUltimoPago = async (req, res) => {
+  const conn = await db.getConnection();
+  let transactionStarted = false;
+
+  try {
+    await conn.beginTransaction();
+    transactionStarted = true;
+
+    const [[pago]] = await conn.query(
+      `
+      SELECT
+        p.*,
+        cu.id_contrato,
+        cu.capital_pendiente AS capital_pendiente_cuota,
+        cu.fecha_vencimiento,
+        co.capital_pendiente AS capital_pendiente_contrato
+      FROM pagos p
+      JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+      JOIN contratos co ON co.id_contrato = cu.id_contrato
+      WHERE p.id_pago = ?
+      FOR UPDATE
+      `,
+      [req.params.id]
+    );
+
+    if (!pago) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(404).json({ error: 'Pago no encontrado.' });
+    }
+
+    const [[ultimoPago]] = await conn.query(
+      `
+      SELECT p.id_pago
+      FROM pagos p
+      JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+      WHERE cu.id_contrato = ?
+      ORDER BY p.id_pago DESC
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [pago.id_contrato]
+    );
+
+    if (Number(ultimoPago?.id_pago) !== Number(pago.id_pago)) {
+      await conn.rollback();
+      transactionStarted = false;
+      return res.status(409).json({ error: 'Solo se puede eliminar el pago más reciente del contrato.' });
+    }
+
+    const capitalRestaurado = round2(
+      toNumber(pago.capital_pendiente_cuota) + toNumber(pago.abono_capital)
+    );
+    const capitalContratoRestaurado = round2(
+      toNumber(pago.capital_pendiente_contrato) + toNumber(pago.abono_capital)
+    );
+
+    await conn.query('DELETE FROM documentos WHERE id_pago = ?', [pago.id_pago]);
+    await conn.query('DELETE FROM pagos WHERE id_pago = ?', [pago.id_pago]);
+    await conn.query(
+      `
+      UPDATE cuotas
+      SET capital_pendiente = ?,
+          estado = ?
+      WHERE id_cuota = ?
+      `,
+      [
+        capitalRestaurado,
+        estadoCuotaSegunFecha(capitalRestaurado, fechaHoyYMD(), pago.fecha_vencimiento),
+        pago.id_cuota
+      ]
+    );
+    await conn.query(
+      `
+      UPDATE contratos
+      SET capital_pendiente = ?,
+          estado = CASE WHEN ? > 0 AND estado = 'cancelado' THEN 'activo' ELSE estado END
+      WHERE id_contrato = ?
+      `,
+      [capitalContratoRestaurado, capitalContratoRestaurado, pago.id_contrato]
+    );
+
+    await conn.commit();
+    transactionStarted = false;
+    return res.json({ ok: true, id_pago: pago.id_pago });
+  } catch (error) {
+    if (transactionStarted) await conn.rollback();
+    console.error('Error al eliminar el último pago:', error);
+    return res.status(500).json({ error: 'No se pudo eliminar el último pago.' });
+  } finally {
+    conn.release();
+  }
+};
+
 exports.registrarPagoMasivo = async (req, res) => {
   const conn = await db.getConnection();
 
@@ -1501,6 +1928,7 @@ exports.pagosPorContrato = async (req, res) => {
         p.forma_pago,
         p.banco,
         p.fecha_recibo,
+        p.numero_recibo,
         cu.numero_cuota,
         d.ruta_archivo
       FROM pagos p

@@ -4,6 +4,7 @@
   "description": "Sistema de gestion de lotificaciones",
   "main": "server.js",
   "scripts": {
+    "prestart": "cd ../frontend && npm run build",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
