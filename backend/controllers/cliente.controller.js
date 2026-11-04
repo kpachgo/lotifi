@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { limpiarComprobantes } = require('../services/comprobantes.storage');
 
 const contactFields = {
   nombres: { label: 'Nombres', maxLength: 100, required: true },
@@ -188,14 +189,84 @@ exports.actualizar = async (req, res) => {
 };
 
 // ELIMINAR
+// Sin contratos: borra directo. Con contratos: responde 409 con el resumen y solo
+// borra todo (contratos, cuotas, pagos, primas, comprobantes) si llega ?confirmar=1.
 exports.eliminar = async (req, res) => {
+  const idCliente = req.params.id;
+  const confirmado = req.query.confirmar === '1';
+  const conn = await db.getConnection();
+  let rutasArchivos = [];
   try {
-    await db.query(
-      'DELETE FROM cliente WHERE id_cliente = ?',
-      [req.params.id]
+    await conn.beginTransaction();
+    const [[cliente]] = await conn.query(
+      'SELECT id_cliente FROM cliente WHERE id_cliente = ? FOR UPDATE',
+      [idCliente]
     );
-    res.json({ ok: true });
+    if (!cliente) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'No se encontró el cliente.' });
+    }
+
+    const [contratos] = await conn.query(
+      'SELECT id_contrato, id_lote, estado FROM contratos WHERE id_cliente = ? FOR UPDATE',
+      [idCliente]
+    );
+    if (contratos.length && !confirmado) {
+      await conn.rollback();
+      return res.status(409).json({
+        error: 'El cliente tiene contratos. Confirma para eliminar también sus contratos, pagos y comprobantes.',
+        requiere_confirmacion: true,
+        contratos: contratos.length,
+        contratos_activos: contratos.filter(c => c.estado === 'activo').length
+      });
+    }
+
+    if (contratos.length) {
+      const ids = contratos.map(c => c.id_contrato);
+      const cuotas = 'SELECT id_cuota FROM cuotas WHERE id_contrato IN (?)';
+      const pagos = `SELECT id_pago FROM pagos WHERE id_cuota IN (${cuotas})`;
+      const primas = 'SELECT id_pago_prima FROM pagos_prima WHERE id_contrato IN (?)';
+
+      const [docs] = await conn.query(`SELECT ruta_archivo FROM documentos WHERE id_pago IN (${pagos})`, [ids]);
+      const [docsPrima] = await conn.query(`SELECT ruta_archivo FROM documentos_prima WHERE id_pago_prima IN (${primas})`, [ids]);
+      rutasArchivos = [...docs, ...docsPrima].map(d => d.ruta_archivo);
+
+      // Orden de hijos a padres por las llaves foraneas
+      await conn.query(`DELETE FROM documentos WHERE id_pago IN (${pagos})`, [ids]);
+      await conn.query(`DELETE FROM recibos WHERE id_pago IN (${pagos})`, [ids]);
+      await conn.query(`DELETE FROM pagos WHERE id_cuota IN (${cuotas})`, [ids]);
+      await conn.query(`DELETE FROM mora WHERE id_cuota IN (${cuotas})`, [ids]);
+      await conn.query('DELETE FROM cuotas WHERE id_contrato IN (?)', [ids]);
+      await conn.query(`DELETE FROM documentos_prima WHERE id_pago_prima IN (${primas})`, [ids]);
+      await conn.query('DELETE FROM pagos_prima WHERE id_contrato IN (?)', [ids]);
+      await conn.query('DELETE FROM pagos_anulados WHERE id_contrato IN (?)', [ids]);
+      await conn.query('DELETE FROM gastos WHERE id_contrato IN (?)', [ids]);
+      await conn.query('DELETE FROM contratos WHERE id_contrato IN (?)', [ids]);
+      await conn.query(
+        "UPDATE lotes SET estado = 'disponible' WHERE id_lote IN (?)",
+        [contratos.map(c => c.id_lote)]
+      );
+    }
+
+    await conn.query('DELETE FROM reservas WHERE id_cliente = ?', [idCliente]);
+    await conn.query('DELETE FROM cliente WHERE id_cliente = ?', [idCliente]);
+    await conn.commit();
   } catch (error) {
-    res.status(500).json(error);
+    try {
+      await conn.rollback();
+    } catch (rollbackError) {
+      console.error('ERROR REVERTIR ELIMINACIÓN DE CLIENTE:', rollbackError);
+    }
+    console.error('ERROR ELIMINAR CLIENTE:', error);
+    return res.status(500).json({ error: 'No se pudo eliminar el cliente.' });
+  } finally {
+    conn.release();
   }
+
+  // Los archivos se borran despues del commit: si fallan, el cliente ya quedo eliminado
+  const fallidos = await limpiarComprobantes(rutasArchivos);
+  return res.json({
+    ok: true,
+    ...(fallidos ? { advertencia: 'El cliente se eliminó, pero no se pudieron borrar todos sus comprobantes.' } : {})
+  });
 };

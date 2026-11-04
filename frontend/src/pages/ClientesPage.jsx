@@ -71,6 +71,10 @@ export default function ClientesPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // { cliente, paso: 1 | 2, contratos, activos }: paso 2 solo si el servidor avisa que tiene contratos
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const contactLoadId = useRef(0);
   const nextContactKey = useRef(0);
 
@@ -209,6 +213,37 @@ export default function ClientesPage() {
     }
   }
 
+  async function deleteCliente() {
+    const { cliente, paso } = deleteTarget;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      // fetch directo: apiRequest descarta el cuerpo del 409 que trae los conteos de contratos
+      const response = await fetch(
+        `/api/cliente/${cliente.id_cliente}${paso === 2 ? '?confirmar=1' : ''}`,
+        { method: 'DELETE' }
+      );
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 409 && body.requiere_confirmacion) {
+        setDeleteTarget({ cliente, paso: 2, contratos: body.contratos, activos: body.contratos_activos });
+        return;
+      }
+      if (!response.ok) throw new Error(body.error || `Error HTTP ${response.status}`);
+      setDeleteTarget(null);
+      setNotice(body.advertencia || 'Cliente eliminado correctamente.');
+      await loadClientes();
+      window.setTimeout(() => setNotice(''), 3500);
+    } catch (deleteErr) {
+      setDeleteError(deleteErr.message || 'No se pudo eliminar el cliente.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const deleteName = deleteTarget
+    ? [deleteTarget.cliente.nombres, deleteTarget.cliente.apellidos].filter(Boolean).join(' ')
+    : '';
+
   return (
     <Box className="customers-page">
       <Flex className="page-heading" align="center" justify="space-between" gap="4">
@@ -274,6 +309,11 @@ export default function ClientesPage() {
                     <Button size="sm" variant="outline" onClick={() => openEdit(cliente)}
                       aria-label={`Editar cliente ${cliente.nombres} ${cliente.apellidos}`}>
                       <Pencil size={15} aria-hidden="true" /> Editar
+                    </Button>{' '}
+                    <Button size="sm" variant="outline" colorPalette="red"
+                      onClick={() => { setDeleteError(''); setDeleteTarget({ cliente, paso: 1 }); }}
+                      aria-label={`Eliminar cliente ${cliente.nombres} ${cliente.apellidos}`}>
+                      <Trash2 size={15} aria-hidden="true" /> Eliminar
                     </Button>
                   </Table.Cell>
                 </Table.Row>
@@ -464,6 +504,42 @@ export default function ClientesPage() {
                   </Button>
                 </Dialog.Footer>
               </form>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
+
+      <Dialog.Root role="alertdialog" open={Boolean(deleteTarget)}
+        onOpenChange={details => { if (!details.open && !deleting) setDeleteTarget(null); }}>
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>
+                  {deleteTarget?.paso === 2 ? 'Este cliente tiene contratos' : 'Eliminar cliente'}
+                </Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                {deleteTarget?.paso === 2 ? (
+                  <Box role="alert" className="notice-error">
+                    <strong>{deleteName}</strong> tiene {deleteTarget.contratos}{' '}
+                    {deleteTarget.contratos === 1 ? 'contrato' : 'contratos'}
+                    {deleteTarget.activos > 0 && <> ({deleteTarget.activos} {deleteTarget.activos === 1 ? 'activo' : 'activos'})</>}.
+                    {' '}Si continúas se borrarán también sus contratos, cuotas, pagos, primas y comprobantes,
+                    y sus lotes volverán a quedar disponibles. Esta acción no se puede deshacer.
+                  </Box>
+                ) : (
+                  <Text>¿Seguro que quieres eliminar a <strong>{deleteName}</strong>?</Text>
+                )}
+                {deleteError && <Box role="alert" className="notice-error" mt="3">{deleteError}</Box>}
+              </Dialog.Body>
+              <Dialog.Footer>
+                <Button variant="outline" disabled={deleting} onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+                <Button colorPalette="red" loading={deleting} onClick={deleteCliente}>
+                  {deleteTarget?.paso === 2 ? 'Sí, eliminar todo' : 'Eliminar'}
+                </Button>
+              </Dialog.Footer>
             </Dialog.Content>
           </Dialog.Positioner>
         </Portal>

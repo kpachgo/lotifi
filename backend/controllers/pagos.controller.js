@@ -1,21 +1,8 @@
 const db = require('../config/db');
-const { eliminarComprobante } = require('../services/comprobantes.storage');
+const { limpiarComprobantes } = require('../services/comprobantes.storage');
 
 const MORA_MENSUAL_INTERES_SALDO = 0.035;
 const DIAS_BASE_MORA = 30;
-
-async function limpiarComprobantes(rutas) {
-  let fallidos = 0;
-  for (const ruta of rutas) {
-    try {
-      await eliminarComprobante(ruta);
-    } catch (error) {
-      fallidos += 1;
-      console.error('ERROR ELIMINAR ARCHIVO DE COMPROBANTE:', error);
-    }
-  }
-  return fallidos;
-}
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);

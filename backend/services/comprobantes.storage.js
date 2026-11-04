@@ -165,11 +165,26 @@ async function eliminarComprobante(rutaArchivo) {
   if (errors.length) throw errors[0];
 }
 
+// Borra varios comprobantes sin detenerse en errores; devuelve cuántos fallaron
+async function limpiarComprobantes(rutas) {
+  let fallidos = 0;
+  for (const ruta of rutas) {
+    try {
+      await eliminarComprobante(ruta);
+    } catch (error) {
+      fallidos += 1;
+      console.error('ERROR ELIMINAR ARCHIVO DE COMPROBANTE:', error);
+    }
+  }
+  return fallidos;
+}
+
 module.exports = {
   InvalidImageError,
   R2ConfigurationError,
   R2StorageError,
   eliminarComprobante,
+  limpiarComprobantes,
   guardarComprobante,
   optimizarComprobante,
   obtenerUrlComprobante
