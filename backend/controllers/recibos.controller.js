@@ -159,6 +159,72 @@ exports.obtenerReciboPorPago = async (req, res) => {
   }
 };
 
+exports.obtenerReciboPrima = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT pp.id_pago_prima, pp.monto_total, pp.forma_pago, pp.banco,
+        pp.fecha_abono, pp.fecha_recibo, pp.numero_recibo,
+        ct.precio_total, ct.prima, ct.monto_financiado,
+        cl.nombres, cl.direccion, cl.dui, cl.nit, cl.telefono,
+        l.numero_lote, p.nombre_poligono, lo.id_lotificacion, lo.nombre AS lotificacion
+       FROM pagos_prima pp
+       JOIN contratos ct ON ct.id_contrato = pp.id_contrato
+       JOIN cliente cl ON cl.id_cliente = ct.id_cliente
+       JOIN lotes l ON l.id_lote = ct.id_lote
+       JOIN poligonos p ON p.id_poligono = l.id_poligono
+       JOIN lotificaciones lo ON lo.id_lotificacion = p.id_lotificacion
+       WHERE pp.id_pago_prima = ?
+       LIMIT 1`,
+      [req.params.id_pago_prima]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Pago de prima no encontrado.' });
+    }
+
+    const row = rows[0];
+    const monto = Number(row.monto_total);
+    const codigoLote =
+      String(row.id_lotificacion).padStart(3, '0') +
+      row.nombre_poligono +
+      row.numero_lote;
+
+    return res.json({
+      cliente: {
+        nombre: row.nombres,
+        direccion: row.direccion || '',
+        documento: [row.dui, row.nit].filter(Boolean).join(' / '),
+        telefono: row.telefono || '',
+        codigo_lote: codigoLote
+      },
+      pago: {
+        cuota_mensual: monto,
+        abono_total: monto,
+        forma_pago: row.forma_pago,
+        banco: row.banco || '',
+        fecha_abono: row.fecha_abono,
+        fecha_recibo: row.fecha_recibo,
+        mora_x_cuotas: 0
+      },
+      saldos: {
+        saldo_anterior: Number(row.precio_total),
+        menos_abono: monto,
+        saldo_actual: Number(row.monto_financiado),
+        saldo_acumulado: monto
+      },
+      texto: {
+        cantidad_letras: convertirNumeroALetras(monto),
+        concepto: [
+          'Pago de prima de lote',
+          `Lotificación ${row.lotificacion} / ${row.nombre_poligono} / Lote ${row.numero_lote}`
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('Error al generar recibo de prima:', error);
+    return res.status(500).json({ error: 'No se pudo generar el recibo de prima.' });
+  }
+};
+
 
 function convertirNumeroALetras(numero) {
   const unidades = [
@@ -185,7 +251,16 @@ function convertirNumeroALetras(numero) {
       return (c === 1 ? 'CIEN' : unidades[c] + 'CIENTOS') +
         (r ? ` ${convertir(r)}` : '');
     }
-    return '';
+    if (n < 1_000_000) {
+      const miles = Math.floor(n / 1000);
+      const resto = n % 1000;
+      return (miles === 1 ? 'MIL' : `${convertir(miles)} MIL`) +
+        (resto ? ` ${convertir(resto)}` : '');
+    }
+    const millones = Math.floor(n / 1_000_000);
+    const resto = n % 1_000_000;
+    return (millones === 1 ? 'UN MILLON' : `${convertir(millones)} MILLONES`) +
+      (resto ? ` ${convertir(resto)}` : '');
   }
 
   const entero = Math.floor(numero);

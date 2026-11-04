@@ -175,6 +175,7 @@ function renderClientes(clientes) {
     tbody.append(fila);
   });
 }
+
 function renderClientesPaginado() {
   const totalClientes = document.getElementById('totalClientes');
   if (totalClientes) {

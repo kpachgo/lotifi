@@ -274,7 +274,13 @@
 
     <div class="card pg-card">
       <div class="card-body">
-        <span class="pg-section">Estado de Cuenta</span>
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="pg-section">Estado de Cuenta</span>
+          <button type="button" id="btnAnularUltimoPago" class="btn btn-sm btn-outline-danger d-none"
+            onclick="anularUltimoPago()">
+            Anular último pago
+          </button>
+        </div>
         <div id="estadoCuentaLeyenda" class="form-text mb-2">
           El campo # muestra la cuota o rango exigible segun la fecha de abono.
         </div>

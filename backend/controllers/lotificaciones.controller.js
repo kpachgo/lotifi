@@ -45,3 +45,21 @@ exports.obtener = async (req, res) => {
     res.status(500).json({ error: 'Error al obtener lotificación' });
   }
 };
+
+// ACTUALIZAR LOTIFICACION
+exports.actualizar = async (req, res) => {
+  try {
+    const { nombre, ubicacion, descripcion } = req.body;
+
+    await db.query(
+      `UPDATE lotificaciones SET nombre=?, ubicacion=?, descripcion=?
+       WHERE id_lotificacion = ?`,
+      [nombre, ubicacion, descripcion, req.params.id]
+    );
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('ERROR ACTUALIZAR LOTIFICACION:', error);
+    res.status(500).json({ error: 'Error al actualizar lotificación' });
+  }
+};

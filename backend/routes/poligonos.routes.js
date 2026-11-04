@@ -4,5 +4,6 @@ const poligonosController = require('../controllers/poligonos.controller');
 
 router.get('/lotificacion/:id', poligonosController.listarPorLotificacion);
 router.post('/', poligonosController.crear);
+router.put('/:id', poligonosController.actualizar);
 
 module.exports = router;

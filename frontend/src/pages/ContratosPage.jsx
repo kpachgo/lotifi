@@ -17,6 +17,7 @@ const cash = value => `$${Number(value || 0).toLocaleString('es-SV', { minimumFr
 export default function ContratosPage() {
   const [search, setSearch] = useState('');
   const [clients, setClients] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [selectedClient, setSelectedClient] = useState(null);
   const [clientContracts, setClientContracts] = useState([]);
   const [contractsLoading, setContractsLoading] = useState(false);
@@ -25,7 +26,6 @@ export default function ContratosPage() {
   const [poligonos, setPoligonos] = useState([]);
   const [lotes, setLotes] = useState([]);
   const [form, setForm] = useState(initial);
-  const [isLoading, setIsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -35,6 +35,41 @@ export default function ContratosPage() {
     apiRequest('/api/lotificaciones').then(data => setLotificaciones(Array.isArray(data) ? data : []))
       .catch(requestError => setError(requestError.message || 'No se pudieron cargar lotificaciones.'));
   }, []);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (query.length < 2) {
+      setClients([]);
+      setSearchLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setSearchLoading(true);
+      setError('');
+      try {
+        const result = await apiRequest(
+          `/api/contratos/buscar-cliente/${encodeURIComponent(query)}`,
+          { signal: controller.signal }
+        );
+        if (!Array.isArray(result)) throw new Error('El servidor devolvió resultados de búsqueda inválidos.');
+        setClients(result.slice(0, 10));
+      } catch (requestError) {
+        if (!controller.signal.aborted) {
+          setClients([]);
+          setError(requestError.message || 'No se pudo buscar clientes.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [search]);
 
   const montoFinanciado = Math.max(0, Number(form.precio_total || 0) - Number(form.prima || 0));
   const cuota = useMemo(() => {
@@ -48,21 +83,13 @@ export default function ContratosPage() {
   }, [form, montoFinanciado]);
   const precioFinal = cuota && Number(form.plazo_meses) ? cuota * Number(form.plazo_meses) + Number(form.prima || 0) : 0;
 
-  async function buscarCliente(event) {
-    event?.preventDefault();
-    if (!search.trim()) return;
-    setIsLoading(true); setError('');
+  function cambiarBusqueda(value) {
+    setSearch(value);
+    setClients([]);
     setSelectedClient(null);
     setClientContracts([]);
     setContractsError('');
-    try {
-      const result = await apiRequest(`/api/contratos/buscar-cliente/${encodeURIComponent(search.trim())}`);
-      const matches = Array.isArray(result) ? result : [];
-      setClients(matches);
-      if (matches.length === 1) await seleccionarCliente(matches[0]);
-    } catch (requestError) {
-      setError(requestError.message || 'No se pudo buscar clientes.');
-    } finally { setIsLoading(false); }
+    setError('');
   }
 
   async function seleccionarCliente(client) {
@@ -154,11 +181,12 @@ export default function ContratosPage() {
         <Flex justify="space-between" align="center" gap="4" wrap="wrap">
           <Box><Heading size="md">1. Busca un cliente</Heading><Text className="table-subtitle">Sus contratos aparecerán debajo al seleccionarlo.</Text></Box>
         </Flex>
-        <form className="module-search contract-search" onSubmit={buscarCliente}>
-          <Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar por nombre o apellido" aria-label="Buscar cliente por nombre o apellido" />
-          <Button type="submit" colorPalette="blue" loading={isLoading}><Search size={16} aria-hidden="true" /> Buscar</Button>
-        </form>
+        <div className="module-search contract-search">
+          <Input value={search} onChange={event => cambiarBusqueda(event.target.value)} placeholder="Escribe al menos 2 letras del nombre o apellido" aria-label="Buscar cliente por nombre o apellido" />
+          {searchLoading && <Text role="status" className="table-subtitle contract-search-feedback">Buscando…</Text>}
+        </div>
         {error && !dialog && <Box className="notice-error" role="alert">{error}</Box>}
+        {search.trim().length < 2 && <Text className="table-subtitle">Escribe al menos 2 letras para buscar. Se muestran hasta 10 resultados.</Text>}
         {selectedClient && <Flex className="selected-client-summary" justify="space-between" align="center" gap="3" wrap="wrap">
           <Flex align="center" gap="3"><span className="selected-client-icon"><UserRound size={18} aria-hidden="true" /></span><Box><Text className="stat-label">Cliente seleccionado</Text><strong>{selectedClient.nombres} {selectedClient.apellidos}</strong><Text className="table-subtitle">{selectedClient.dui || 'Sin DUI registrado'}</Text></Box></Flex>
         </Flex>}
@@ -175,6 +203,9 @@ export default function ContratosPage() {
             </Table.Row>)}</Table.Body>
           </Table.Root>
         </div>}
+        {search.trim().length >= 2 && !searchLoading && !error && clients.length === 0 && (
+          <Text className="table-subtitle contract-search-feedback" role="status">No se encontraron clientes con ese nombre o apellido.</Text>
+        )}
       </section>
       {selectedClient && <section className="customers-card module-section">
         <Flex justify="space-between" align="center" gap="4" wrap="wrap" mb="3">

@@ -1,7 +1,7 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 
 const app = express();
 
@@ -34,6 +34,9 @@ app.use('/api/cuotas', require('./routes/cuotas.routes'));
 // Pagos
 app.use('/api/pagos', require('./routes/pagos.routes'));
 
+// Primas de contratos
+app.use('/api/primas', require('./routes/primas.routes'));
+
 // Documentos
 app.use('/api/documentos', require('./routes/documentos.routes'));
 
@@ -44,7 +47,8 @@ app.use('/api/deudores', require('./routes/deudores.routes'));
 app.use('/api/reportes', require('./routes/reportes.routes'));
 
 // Subida de archivos
-app.use('/uploads', express.static('backend/uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'backend', 'uploads')));
 
 const recibosRoutes = require('./routes/recibos.routes');
 app.use('/api/recibos', recibosRoutes);

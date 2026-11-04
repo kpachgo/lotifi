@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Badge, Box, Button, Dialog, Field, Flex, Heading, Input, Portal,
   SimpleGrid, Table, Text, CloseButton
@@ -18,12 +18,17 @@ export default function PagosPage() {
   const accountRequestId = useRef(0);
   const [query, setQuery] = useState('');
   const [clients, setClients] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [selectedClient, setSelectedClient] = useState(null);
   const [contracts, setContracts] = useState([]);
   const [contractId, setContractId] = useState('');
   const [account, setAccount] = useState(null);
   const [installments, setInstallments] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [primaTransaction, setPrimaTransaction] = useState(null);
+  const [primaPayment, setPrimaPayment] = useState({
+    date: today(), receiptDate: today(), method: '', bank: '', receipt: ''
+  });
   const [receiptImage, setReceiptImage] = useState('');
   const [locationSearchOpen, setLocationSearchOpen] = useState(false);
   const [locationLotifications, setLocationLotifications] = useState([]);
@@ -38,6 +43,7 @@ export default function PagosPage() {
   const [batch, setBatch] = useState({ until: '', date: today(), receiptDate: today(), method: '', bank: '', receipt: '' });
   const [paymentId, setPaymentId] = useState(null);
   const [receiptNumber, setReceiptNumber] = useState('');
+  const [receiptType, setReceiptType] = useState('cuota');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -50,72 +56,116 @@ export default function PagosPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  async function searchAccount(event) {
-    event?.preventDefault();
-    if (!query.trim()) return;
-    const requestId = ++accountRequestId.current;
+  useEffect(() => {
+    const searchValue = query.trim();
+    if (searchValue.length < 2) {
+      setSearchLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      const requestId = ++accountRequestId.current;
+      const lotCode = searchValue.replace(/\s+/g, '');
+      const isLotCode = /^\d+[A-Z]+\d+$/i.test(lotCode);
+      setSearchLoading(true);
+      setError('');
+
+      try {
+        if (isLotCode) {
+          setBusy(true);
+          const data = await apiRequest('/api/pagos/por-codigo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codigo: lotCode }),
+            signal: controller.signal
+          });
+          const [cuotas, paymentRows] = await Promise.all([
+            apiRequest(`/api/cuotas/contrato/${data.contrato.id_contrato}`, { signal: controller.signal }),
+            apiRequest(`/api/pagos/contrato/${data.contrato.id_contrato}`, { signal: controller.signal })
+          ]);
+          const primaRow = await apiRequest(`/api/primas/contrato/${data.contrato.id_contrato}`, { signal: controller.signal });
+          if (requestId !== accountRequestId.current) return;
+          setAccount(data);
+          setInstallments(Array.isArray(cuotas) ? cuotas : []);
+          setPayments(Array.isArray(paymentRows) ? paymentRows : []);
+          setPrimaTransaction(primaRow);
+          setContractId(String(data.contrato.id_contrato));
+          setPrimaPayment({ date: today(), receiptDate: today(), method: '', bank: '', receipt: '' });
+          setPayment(current => ({ ...current, amount: data.total_sugerido_pago_unico ?? data.total ?? '' }));
+          const dueDate = data.cuota?.fecha_vencimiento?.slice(0, 10) || today();
+          setBatch(current => ({
+            ...current,
+            until: data.cuota ? Number(data.cuota.numero_cuota) : '',
+            date: dueDate,
+            receiptDate: dueDate
+          }));
+          return;
+        }
+
+        const data = await apiRequest(`/api/contratos/buscar-cliente/${encodeURIComponent(searchValue)}`, {
+          signal: controller.signal
+        });
+        if (requestId !== accountRequestId.current) return;
+        setClients(Array.isArray(data) ? data.slice(0, 10) : []);
+      } catch (requestError) {
+        if (!controller.signal.aborted && requestId === accountRequestId.current) {
+          setError(requestError.message || (isLotCode
+            ? 'No se pudo buscar la cuenta.'
+            : 'No se pudieron buscar clientes.'));
+        }
+      } finally {
+        if (!controller.signal.aborted && requestId === accountRequestId.current) {
+          setSearchLoading(false);
+          setBusy(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [query]);
+
+  function changeQuery(value) {
+    accountRequestId.current += 1;
+    setQuery(value);
+    setSearchLoading(false);
+    setBusy(false);
     setLoadingContractId('');
-    setBusy(true); setError('');
     setClients([]);
     setSelectedClient(null);
     setContracts([]);
     setAccount(null);
     setInstallments([]);
     setPayments([]);
+    setPrimaTransaction(null);
     setContractId('');
-    try {
-      const searchValue = query.trim();
-      const lotCode = searchValue.replace(/\s+/g, '');
-      if (/^\d+[A-Z]+\d+$/i.test(lotCode)) {
-        const data = await apiRequest('/api/pagos/por-codigo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ codigo: lotCode })
-        });
-        const [cuotas, paymentRows] = await Promise.all([
-          apiRequest(`/api/cuotas/contrato/${data.contrato.id_contrato}`),
-          apiRequest(`/api/pagos/contrato/${data.contrato.id_contrato}`)
-        ]);
-        if (requestId !== accountRequestId.current) return;
-        setAccount(data);
-        setInstallments(Array.isArray(cuotas) ? cuotas : []);
-        setPayments(Array.isArray(paymentRows) ? paymentRows : []);
-        setContractId(String(data.contrato.id_contrato));
-        setPayment(current => ({ ...current, amount: data.total_sugerido_pago_unico ?? data.total ?? '' }));
-        const dueDate = data.cuota?.fecha_vencimiento?.slice(0, 10) || today();
-        setBatch(current => ({
-          ...current,
-          until: data.cuota ? Number(data.cuota.numero_cuota) : '',
-          date: dueDate,
-          receiptDate: dueDate
-        }));
-        return;
-      }
-
-      const data = await apiRequest(`/api/contratos/buscar-cliente/${encodeURIComponent(searchValue)}`);
-      if (requestId !== accountRequestId.current) return;
-      const results = Array.isArray(data) ? data : [];
-      setClients(results);
-      if (results.length === 1) await chooseClient(results[0]);
-    } catch (requestError) { setError(requestError.message || 'No se pudieron buscar clientes.'); }
-    finally { setBusy(false); }
+    setError('');
   }
 
   async function chooseClient(client) {
-    accountRequestId.current += 1;
+    const requestId = ++accountRequestId.current;
     setLoadingContractId('');
-    setBusy(true); setError(''); setAccount(null); setInstallments([]); setPayments([]); setContractId('');
+    setBusy(true); setError(''); setAccount(null); setInstallments([]); setPayments([]); setPrimaTransaction(null); setContractId('');
     setSelectedClient(client);
     setContracts([]);
     try {
       const data = await apiRequest(`/api/contratos/cliente/${client.id_cliente}`);
-      setContracts(Array.isArray(data) ? data : []);
-    } catch (requestError) { setError(requestError.message || 'No se pudieron cargar contratos.'); }
-    finally { setBusy(false); }
+      if (requestId === accountRequestId.current) setContracts(Array.isArray(data) ? data : []);
+    } catch (requestError) {
+      if (requestId === accountRequestId.current) setError(requestError.message || 'No se pudieron cargar contratos.');
+    } finally {
+      if (requestId === accountRequestId.current) setBusy(false);
+    }
   }
 
   async function loadAccount(id, date = today()) {
     const requestId = ++accountRequestId.current;
+    if (String(id) !== contractId) {
+      setPrimaPayment({ date: today(), receiptDate: today(), method: '', bank: '', receipt: '' });
+    }
     setContractId(String(id));
     setAccount(null);
     setInstallments([]);
@@ -123,15 +173,17 @@ export default function PagosPage() {
     setLoadingContractId(String(id));
     setError('');
     try {
-      const [data, cuotas, paymentRows] = await Promise.all([
+      const [data, cuotas, paymentRows, primaRow] = await Promise.all([
         apiRequest(`/api/pagos/estado/${id}?fecha_abono=${encodeURIComponent(date)}`),
         apiRequest(`/api/cuotas/contrato/${id}`),
-        apiRequest(`/api/pagos/contrato/${id}`)
+        apiRequest(`/api/pagos/contrato/${id}`),
+        apiRequest(`/api/primas/contrato/${id}`)
       ]);
       if (requestId !== accountRequestId.current) return;
       setAccount(data);
       setInstallments(Array.isArray(cuotas) ? cuotas : []);
       setPayments(Array.isArray(paymentRows) ? paymentRows : []);
+      setPrimaTransaction(primaRow);
       setPayment(current => ({
         ...current,
         date: date < (data.limites_fecha_abono?.min || date) ? data.limites_fecha_abono.min : date,
@@ -180,9 +232,9 @@ export default function PagosPage() {
     setPaymentActionBusy(true);
     setError('');
     try {
-      await apiRequest(`/api/pagos/${paymentRow.id_pago}`, { method: 'DELETE' });
+      const result = await apiRequest(`/api/pagos/${paymentRow.id_pago}`, { method: 'DELETE' });
       await loadAccount(contractId, payment.date);
-      setNotice('Último pago eliminado correctamente.');
+      setNotice(result.advertencia || 'Último pago eliminado correctamente.');
     } catch (requestError) {
       setError(requestError.message || 'No se pudo eliminar el último pago.');
     } finally {
@@ -296,6 +348,7 @@ export default function PagosPage() {
         })
       });
       setPaymentId(result.id_pago);
+      setReceiptType('cuota');
       setReceiptNumber(payment.receipt);
       setFile(null); setPreview('');
       setDialogOpen(true);
@@ -334,20 +387,105 @@ export default function PagosPage() {
     finally { setBusy(false); }
   }
 
+  async function registerPrima(event) {
+    event.preventDefault();
+    if (!account?.contrato || Number(account.contrato.prima) <= 0) {
+      setError('El contrato no tiene un monto de prima para registrar.');
+      return;
+    }
+    if (primaPayment.method !== 'Efectivo' && !primaPayment.bank.trim()) {
+      setError('El banco es obligatorio para esta forma de pago.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const result = await apiRequest('/api/primas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_contrato: Number(contractId),
+          fecha_abono: primaPayment.date,
+          fecha_recibo: primaPayment.receiptDate,
+          forma_pago: primaPayment.method,
+          banco: primaPayment.bank.trim() || null,
+          numero_recibo: primaPayment.receipt.trim()
+        })
+      });
+      setPaymentId(result.id_pago_prima);
+      setReceiptType('prima');
+      setReceiptNumber(primaPayment.receipt);
+      setFile(null);
+      setPreview('');
+      setDialogOpen(true);
+      setNotice(`Prima registrada correctamente. Recibo ${primaPayment.receipt}.`);
+      await loadAccount(contractId, payment.date);
+    } catch (requestError) {
+      setError(requestError.message || 'No se pudo registrar la prima.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadReceipt(event) {
     event.preventDefault();
     if (!paymentId || !file) { setError('Selecciona una imagen de comprobante.'); return; }
     setBusy(true); setError('');
     try {
       const formData = new FormData();
-      formData.append('id_pago', String(paymentId));
       formData.append('comprobante', file);
-      await apiRequest('/api/documentos/comprobante', { method: 'POST', body: formData });
+      const uploadUrl = receiptType === 'prima'
+        ? '/api/primas/comprobante'
+        : '/api/documentos/comprobante';
+      formData.append(receiptType === 'prima' ? 'id_pago_prima' : 'id_pago', String(paymentId));
+      await apiRequest(uploadUrl, { method: 'POST', body: formData });
       await loadAccount(contractId, payment.date);
-      setNotice('Comprobante subido correctamente.');
+      setNotice(receiptType === 'prima'
+        ? 'Comprobante de prima subido correctamente.'
+        : 'Comprobante subido correctamente.');
       setDialogOpen(false);
     } catch (requestError) { setError(requestError.message || 'No se pudo subir el comprobante.'); }
     finally { setBusy(false); }
+  }
+
+  function openReceiptUpload(item) {
+    setPaymentId(item.id_pago);
+    setReceiptType('cuota');
+    setReceiptNumber(item.numero_recibo || String(item.id_pago));
+    setFile(null);
+    setPreview('');
+    setError('');
+    setDialogOpen(true);
+  }
+
+  function openPrimaReceiptUpload(item) {
+    setPaymentId(item.id_pago_prima);
+    setReceiptType('prima');
+    setReceiptNumber(item.numero_recibo || String(item.id_pago_prima));
+    setFile(null);
+    setPreview('');
+    setError('');
+    setDialogOpen(true);
+  }
+
+  async function viewReceipt(item) {
+    setError('');
+    try {
+      const url = item.id_pago_prima
+        ? `/api/primas/comprobante/${item.id_documento_prima}`
+        : `/api/documentos/comprobante/${item.id_documento}`;
+      const result = await apiRequest(url);
+      if (typeof result.url !== 'string' || !result.url) {
+        throw new Error('El servidor no devolvió el enlace del comprobante.');
+      }
+      setReceiptImage(result.url);
+    } catch (requestError) {
+      setError(requestError.message || 'No se pudo abrir el comprobante.');
+    }
+  }
+
+  function updatePrimaPayment(key, value) {
+    setPrimaPayment(current => ({ ...current, [key]: value }));
   }
 
   function updatePayment(key, value) { setPayment(current => ({ ...current, [key]: value })); }
@@ -366,25 +504,68 @@ export default function PagosPage() {
     <Box>
       <Box className="page-heading"><Text className="eyebrow">CAJA</Text><Heading size="2xl" className="page-title">Pagos</Heading><Text className="page-description">Consulta estados de cuenta y registra pagos individuales o múltiples.</Text></Box>
       {notice && <Box role="status" className="notice-success">{notice}</Box>}
-      {error && <Box role="alert" className="notice-error">{error}</Box>}
+      {error && !dialogOpen && !(account && Number(account.contrato?.prima) > 0 && !primaTransaction) && <Box role="alert" className="notice-error">{error}</Box>}
       <section className="customers-card module-section">
         <Flex justify="space-between" align="center" gap="4" wrap="wrap" mb="4">
           <Box><Heading size="md">1. Buscar cuenta</Heading><Text className="table-subtitle">Busca un cliente por nombre o apellido, o una cuenta por código de lote.</Text></Box>
         </Flex>
         <Flex align="center" gap="3" wrap="wrap">
-          <form className="module-search payment-unified-search" onSubmit={searchAccount}>
-            <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Nombre o apellido del cliente, o código de lote (ej. 001A1)" aria-label="Nombre o apellido del cliente, o código de lote" />
-            <Button type="submit" colorPalette="blue" loading={busy}><Search size={16} aria-hidden="true" /> Buscar</Button>
-          </form>
+          <div className="module-search payment-unified-search">
+            <Input value={query} onChange={event => changeQuery(event.target.value)} placeholder="Nombre o apellido del cliente, o código de lote (ej. 001A1)" aria-label="Nombre o apellido del cliente, o código de lote" />
+            {searchLoading && <Text role="status" className="payment-search-feedback">Buscando…</Text>}
+          </div>
           <Button variant="outline" colorPalette="blue" onClick={openLocationSearch}>
             <MapPin size={16} aria-hidden="true" /> Buscar por ubicación
           </Button>
         </Flex>
+        {query.trim().length < 2 && <Text className="table-subtitle">Escribe al menos 2 caracteres para buscar. Se muestran hasta 10 clientes.</Text>}
         {clients.length > 0 && <div className="table-scroll payment-client-results"><Table.Root className="customers-table" size="sm"><Table.Header><Table.Row><Table.ColumnHeader>Cliente</Table.ColumnHeader><Table.ColumnHeader>DUI</Table.ColumnHeader><Table.ColumnHeader textAlign="right">Acción</Table.ColumnHeader></Table.Row></Table.Header><Table.Body>{clients.map(client => <Table.Row key={client.id_cliente}><Table.Cell><strong>{client.nombres} {client.apellidos}</strong></Table.Cell><Table.Cell>{client.dui || '—'}</Table.Cell><Table.Cell textAlign="right"><Button size="sm" variant={selectedClient?.id_cliente === client.id_cliente ? 'solid' : 'outline'} colorPalette="blue" disabled={selectedClient?.id_cliente === client.id_cliente} loading={busy && selectedClient?.id_cliente === client.id_cliente} onClick={() => chooseClient(client)}>{selectedClient?.id_cliente === client.id_cliente ? 'Seleccionado' : 'Ver contratos'}</Button></Table.Cell></Table.Row>)}</Table.Body></Table.Root></div>}
+        {query.trim().length >= 2 && !searchLoading && !busy && !error && clients.length === 0 && !/^\d+[A-Z]+\d+$/i.test(query.trim().replace(/\s+/g, '')) && (
+          <Text role="status" className="payment-search-feedback">No se encontraron clientes con ese nombre o apellido.</Text>
+        )}
       </section>
       {selectedClient && <section className="customers-card module-section">
         <Flex justify="space-between" align="center" gap="3" mb="3"><Box><Heading size="md">2. Contratos del cliente</Heading><Text className="table-subtitle">{selectedClient.nombres} {selectedClient.apellidos}</Text></Box></Flex>
         <div className="table-scroll"><Table.Root className="customers-table" size="sm"><Table.Header><Table.Row><Table.ColumnHeader>ID</Table.ColumnHeader><Table.ColumnHeader>Lote</Table.ColumnHeader><Table.ColumnHeader>Plazo</Table.ColumnHeader><Table.ColumnHeader>Estado</Table.ColumnHeader><Table.ColumnHeader>Acción</Table.ColumnHeader></Table.Row></Table.Header><Table.Body>{contracts.length ? contracts.map(contract => <Table.Row key={contract.id_contrato}><Table.Cell>#{contract.id_contrato}</Table.Cell><Table.Cell>{contract.lotificacion} / {contract.poligono} / Lote {contract.numero_lote}</Table.Cell><Table.Cell>{contract.plazo_meses} meses</Table.Cell><Table.Cell><Badge colorPalette={contract.estado === 'activo' ? 'green' : 'gray'}>{contract.estado}</Badge></Table.Cell><Table.Cell><Button size="sm" colorPalette="blue" loading={loadingContractId === String(contract.id_contrato)} disabled={Boolean(loadingContractId)} onClick={() => loadAccount(contract.id_contrato)}>{contractId === String(contract.id_contrato) && account ? 'Cuenta seleccionada' : 'Ver estado de cuenta'}</Button></Table.Cell></Table.Row>) : <Table.Row><Table.Cell colSpan={5} className="empty-row">Este cliente no tiene contratos.</Table.Cell></Table.Row>}</Table.Body></Table.Root></div>
+      </section>}
+      {account && String(account.contrato?.id_contrato) === contractId && Number(account.contrato?.prima) > 0 && <section className="customers-card module-section">
+        <Flex justify="space-between" align="center" gap="3" wrap="wrap" mb="3">
+          <Box>
+            <Heading size="md">Prima del contrato</Heading>
+            <Text className="table-subtitle">Transacción independiente de las cuotas. Importe acordado: {money(account.contrato.prima)}.</Text>
+          </Box>
+          <Badge colorPalette="blue">No afecta el saldo de cuotas</Badge>
+        </Flex>
+        {primaTransaction ? <div className="table-scroll">
+          <Table.Root className="customers-table" size="sm">
+            <Table.Header><Table.Row><Table.ColumnHeader>Fecha</Table.ColumnHeader><Table.ColumnHeader>Recibo</Table.ColumnHeader><Table.ColumnHeader>Forma de pago</Table.ColumnHeader><Table.ColumnHeader textAlign="right">Monto</Table.ColumnHeader><Table.ColumnHeader>Comprobante</Table.ColumnHeader><Table.ColumnHeader textAlign="right">Acciones</Table.ColumnHeader></Table.Row></Table.Header>
+            <Table.Body><Table.Row>
+              <Table.Cell>{dateLabel(primaTransaction.fecha_abono)}</Table.Cell>
+              <Table.Cell>{primaTransaction.numero_recibo}</Table.Cell>
+              <Table.Cell>{primaTransaction.forma_pago}{primaTransaction.banco ? ` · ${primaTransaction.banco}` : ''}</Table.Cell>
+              <Table.Cell textAlign="right"><strong>{money(primaTransaction.monto_total)}</strong></Table.Cell>
+              <Table.Cell>{primaTransaction.id_documento_prima
+                ? <Button size="xs" variant="outline" colorPalette="blue" onClick={() => viewReceipt({ ...primaTransaction, id_pago_prima: primaTransaction.id_pago_prima })}>Ver foto</Button>
+                : <Text className="table-subtitle">Sin foto</Text>}</Table.Cell>
+              <Table.Cell textAlign="right"><Flex gap="2" justify="flex-end" wrap="wrap">
+                {!primaTransaction.id_documento_prima && <Button size="xs" variant="outline" colorPalette="blue" onClick={() => openPrimaReceiptUpload(primaTransaction)}><FileUp size={13} aria-hidden="true" /> Adjuntar foto</Button>}
+                <Button as="a" size="xs" variant="outline" colorPalette="blue" href={`/recibo-print.html?id_pago_prima=${primaTransaction.id_pago_prima}`} target="_blank" rel="noopener noreferrer"><Printer size={13} aria-hidden="true" /> Recibo {primaTransaction.numero_recibo}</Button>
+              </Flex></Table.Cell>
+            </Table.Row></Table.Body>
+          </Table.Root>
+        </div> : <form onSubmit={registerPrima} className="prima-payment-form">
+          <Text className="table-subtitle" mb="3">Registra la prima solo si ya fue cobrada. Puedes adjuntar la foto ahora o después; si corresponde a un pago anterior, usa su fecha original.</Text>
+          {error && <Box role="alert" className="notice-error dialog-error">{error}</Box>}
+          <SimpleGrid columns={{ base: 1, sm: 2, xl: 3 }} gap="4">
+            <Field.Root><Field.Label>Monto de la prima</Field.Label><Input value={money(account.contrato.prima)} readOnly /></Field.Root>
+            <Field.Root><Field.Label>Fecha de abono</Field.Label><Input type="date" min={String(account.contrato.fecha_inicio).slice(0, 10)} max={today()} value={primaPayment.date} onChange={event => updatePrimaPayment('date', event.target.value)} required /></Field.Root>
+            <Field.Root><Field.Label>Fecha del recibo</Field.Label><Input type="date" min={String(account.contrato.fecha_inicio).slice(0, 10)} max={today()} value={primaPayment.receiptDate} onChange={event => updatePrimaPayment('receiptDate', event.target.value)} required /></Field.Root>
+            <Field.Root><Field.Label>Forma de pago</Field.Label><select className="native-select" value={primaPayment.method} onChange={event => updatePrimaPayment('method', event.target.value)} required><option value="">Selecciona</option>{paymentMethods.map(method => <option key={method}>{method}</option>)}</select></Field.Root>
+            <Field.Root><Field.Label>Banco</Field.Label><Input maxLength={100} value={primaPayment.bank} onChange={event => updatePrimaPayment('bank', event.target.value)} required={primaPayment.method !== '' && primaPayment.method !== 'Efectivo'} /></Field.Root>
+            <Field.Root><Field.Label>Número de recibo</Field.Label><Input maxLength={30} value={primaPayment.receipt} onChange={event => updatePrimaPayment('receipt', event.target.value)} required /></Field.Root>
+          </SimpleGrid>
+          <Flex justify="flex-end" mt="4"><Button type="submit" colorPalette="blue" loading={busy}><ReceiptText size={16} aria-hidden="true" /> Registrar prima</Button></Flex>
+        </form>}
       </section>}
       {account && String(account.contrato?.id_contrato) === contractId && <section className="customers-card module-section">
         <Flex justify="space-between" align="center" mb="4"><Box><Heading size="md">Estado de cuenta</Heading><Text className="table-subtitle">{accountClientName || `Contrato #${account.contrato?.id_contrato}`} · {accountLot ? `${accountLot.lotificacion} / ${accountLot.poligono} / Lote ${accountLot.numero_lote}` : ''}</Text></Box><Badge colorPalette={quota ? 'orange' : 'green'}>{quota ? 'Cuota pendiente' : 'Al día'}</Badge></Flex>
@@ -426,6 +607,23 @@ export default function PagosPage() {
                     <Table.Cell><Badge colorPalette={statusColor}>{status}</Badge></Table.Cell>
                     <Table.Cell>
                       <Flex gap="2" wrap="wrap" align="center">
+                        {installmentPayments.map(item => (
+                          <Button
+                            as="a"
+                            href={`/recibo-print.html?id_pago=${item.id_pago}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            key={`print-receipt-${item.id_pago}`}
+                            size="xs"
+                            variant="outline"
+                            colorPalette="blue"
+                            aria-label={`Imprimir recibo ${item.numero_recibo || item.id_pago} de la cuota ${installment.numero_cuota}`}
+                            title={`Imprimir recibo ${item.numero_recibo || item.id_pago}`}
+                          >
+                            <Printer size={13} aria-hidden="true" />
+                            Recibo {item.numero_recibo || item.id_pago}
+                          </Button>
+                        ))}
                         {receipts.map(item =>
                           <Button
                             key={`receipt-${item.id_pago}`}
@@ -433,12 +631,21 @@ export default function PagosPage() {
                             variant="outline"
                             colorPalette="blue"
                             aria-label={`Ver comprobante de la cuota ${installment.numero_cuota}${item.numero_recibo ? `, recibo ${item.numero_recibo}` : ''}`}
-                            onClick={() => setReceiptImage(`/${String(item.ruta_archivo).replace(/^\/+/, '')}`)}
+                            onClick={() => viewReceipt(item)}
                           >
                             Ver foto{receipts.length > 1 ? ` · ${item.numero_recibo || item.id_pago}` : ''}
                           </Button>
                         )}
                         {latestPayment && <>
+                          {!latestPayment.id_documento && <Button
+                            size="xs"
+                            variant="outline"
+                            colorPalette="blue"
+                            disabled={paymentActionBusy}
+                            onClick={() => openReceiptUpload(latestPayment)}
+                          >
+                            <FileUp size={13} aria-hidden="true" /> Adjuntar foto
+                          </Button>}
                           <Button
                             size="xs"
                             variant="outline"
@@ -461,7 +668,7 @@ export default function PagosPage() {
                             Eliminar último pago
                           </Button>
                         </>}
-                        {!receipts.length && !latestPayment && <Text className="table-subtitle">—</Text>}
+                        {!installmentPayments.length && <Text className="table-subtitle">—</Text>}
                       </Flex>
                     </Table.Cell>
                   </Table.Row>;
@@ -583,13 +790,19 @@ export default function PagosPage() {
         </Dialog.Content></Dialog.Positioner></Portal>
       </Dialog.Root>
 
-      <Dialog.Root open={dialogOpen} onOpenChange={details => setDialogOpen(details.open)} size="lg"><Portal><Dialog.Backdrop /><Dialog.Positioner><Dialog.Content className="customer-dialog"><Dialog.Header><Box><Dialog.Title>Pago registrado</Dialog.Title><Text className="dialog-subtitle">Pago #{paymentId} · Recibo {receiptNumber}</Text></Box><Dialog.CloseTrigger asChild><CloseButton size="sm" /></Dialog.CloseTrigger></Dialog.Header><Dialog.Body>
+      <Dialog.Root open={dialogOpen} onOpenChange={details => setDialogOpen(details.open)} size="lg"><Portal><Dialog.Backdrop /><Dialog.Positioner><Dialog.Content className="customer-dialog"><Dialog.Header><Box><Dialog.Title>{receiptType === 'prima' ? 'Prima registrada' : 'Pago registrado'}</Dialog.Title><Text className="dialog-subtitle">{receiptType === 'prima' ? 'Prima' : 'Pago'} #{paymentId} · Recibo {receiptNumber}</Text></Box><Dialog.CloseTrigger asChild><CloseButton size="sm" /></Dialog.CloseTrigger></Dialog.Header><Dialog.Body>
+        {error && <Box role="alert" className="notice-error dialog-error">{error}</Box>}
+        <Text className="table-subtitle" mb="4">
+          {receiptType === 'prima'
+            ? 'Puedes adjuntar la foto ahora o hacerlo después desde la sección Prima del contrato.'
+            : 'Puedes adjuntar la foto ahora o hacerlo después desde el último pago registrado.'}
+        </Text>
         <form id="receipt-upload" onSubmit={uploadReceipt}>
-          <Field.Root><Field.Label>Adjuntar comprobante de pago</Field.Label><Input type="file" accept="image/*" onChange={event => { const selected = event.target.files?.[0] || null; setFile(selected); setPreview(selected ? URL.createObjectURL(selected) : ''); }} /></Field.Root>
+          <Field.Root><Field.Label>Adjuntar comprobante</Field.Label><Input type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { const selected = event.target.files?.[0] || null; setFile(selected); setPreview(selected ? URL.createObjectURL(selected) : ''); setError(''); }} /></Field.Root>
           {preview && <img className="receipt-preview" src={preview} alt="Vista previa del comprobante" />}
         </form>
       </Dialog.Body><Dialog.Footer>
-        <Button variant="outline" onClick={() => window.open(`/recibo-print.html?id_pago=${paymentId}`, '_blank', 'noopener,noreferrer')}><Printer size={16} aria-hidden="true" /> Imprimir recibo</Button>
+        <Button as="a" href={`/recibo-print.html?${receiptType === 'prima' ? 'id_pago_prima' : 'id_pago'}=${paymentId}`} target="_blank" rel="noopener noreferrer" variant="outline"><Printer size={16} aria-hidden="true" /> Imprimir recibo</Button>
         <Button variant="outline" onClick={() => setDialogOpen(false)}>Ahora no</Button>
         <Button colorPalette="blue" onClick={() => document.getElementById('receipt-upload').requestSubmit()} loading={busy} disabled={!file}><FileUp size={16} aria-hidden="true" /> Subir comprobante</Button>
       </Dialog.Footer></Dialog.Content></Dialog.Positioner></Portal></Dialog.Root>

@@ -5,6 +5,7 @@ const lotesController = require('../controllers/lotes.controller');
 router.get('/:id', lotesController.obtenerPorId);
 router.get('/poligono/:id', lotesController.listarPorPoligono);
 router.post('/', lotesController.crear);
+router.put('/:id', lotesController.actualizar);
 router.get('/disponibles/:idPoligono', lotesController.listarDisponiblesPorPoligono);
 
 

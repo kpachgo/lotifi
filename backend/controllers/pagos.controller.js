@@ -1,7 +1,21 @@
 const db = require('../config/db');
+const { eliminarComprobante } = require('../services/comprobantes.storage');
 
 const MORA_MENSUAL_INTERES_SALDO = 0.035;
 const DIAS_BASE_MORA = 30;
+
+async function limpiarComprobantes(rutas) {
+  let fallidos = 0;
+  for (const ruta of rutas) {
+    try {
+      await eliminarComprobante(ruta);
+    } catch (error) {
+      fallidos += 1;
+      console.error('ERROR ELIMINAR ARCHIVO DE COMPROBANTE:', error);
+    }
+  }
+  return fallidos;
+}
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -379,6 +393,50 @@ async function actualizarContratoYLote(conn, contrato, nuevoCapitalContrato) {
       [contrato.id_lote]
     );
   }
+}
+
+// Agrupa las filas de un mismo registro de pago bajo el id de la primera
+async function marcarMovimiento(conn, idsPago) {
+  if (!idsPago.length) return;
+  await conn.query(
+    'UPDATE pagos SET id_movimiento = ? WHERE id_pago IN (?)',
+    [idsPago[0], idsPago]
+  );
+}
+
+async function obtenerUltimoMovimiento(conn, idContrato) {
+  // ponytail: pagos anteriores a la migracion 04 (id_movimiento NULL) se anulan fila por fila
+  const [pagos] = await conn.query(
+    `
+    SELECT p.*, cu.numero_cuota,
+           DATE_FORMAT(p.fecha_abono, '%Y-%m-%d') AS fecha_abono_ymd
+    FROM pagos p
+    JOIN cuotas cu ON cu.id_cuota = p.id_cuota
+    WHERE cu.id_contrato = ?
+      AND COALESCE(p.id_movimiento, p.id_pago) = (
+        SELECT COALESCE(p2.id_movimiento, p2.id_pago)
+        FROM pagos p2
+        JOIN cuotas c2 ON c2.id_cuota = p2.id_cuota
+        WHERE c2.id_contrato = ?
+        ORDER BY p2.id_pago DESC
+        LIMIT 1
+      )
+    ORDER BY p.id_pago
+    `,
+    [idContrato, idContrato]
+  );
+
+  if (!pagos.length) return null;
+
+  return {
+    id_movimiento: pagos[0].id_movimiento || pagos[0].id_pago,
+    fecha_abono: pagos[0].fecha_abono_ymd,
+    numero_recibo: pagos[0].numero_recibo,
+    cuotas: pagos.map((p) => p.numero_cuota),
+    abono_capital: round2(pagos.reduce((acc, p) => acc + toNumber(p.abono_capital), 0)),
+    monto_total: round2(pagos.reduce((acc, p) => acc + toNumber(p.monto_total), 0)),
+    pagos
+  };
 }
 
 exports.estadoCuentaContrato = async (req, res) => {
@@ -992,6 +1050,10 @@ exports.registrarPago = async (req, res) => {
       capitalContratoActual = 0;
     }
 
+    await marcarMovimiento(
+      conn,
+      [...pagosAplicados, ...pagosExtra].map((p) => p.id_pago)
+    );
     await actualizarContratoYLote(conn, contrato, capitalContratoActual);
     await conn.commit();
 
@@ -1348,6 +1410,7 @@ exports.editarMontoUltimoPago = async (req, res) => {
 exports.eliminarUltimoPago = async (req, res) => {
   const conn = await db.getConnection();
   let transactionStarted = false;
+  let rutasArchivos = [];
 
   try {
     await conn.beginTransaction();
@@ -1402,6 +1465,12 @@ exports.eliminarUltimoPago = async (req, res) => {
       toNumber(pago.capital_pendiente_contrato) + toNumber(pago.abono_capital)
     );
 
+    const [documentos] = await conn.query(
+      'SELECT ruta_archivo FROM documentos WHERE id_pago = ?',
+      [pago.id_pago]
+    );
+    rutasArchivos = documentos.map(documento => documento.ruta_archivo);
+
     await conn.query('DELETE FROM documentos WHERE id_pago = ?', [pago.id_pago]);
     await conn.query('DELETE FROM pagos WHERE id_pago = ?', [pago.id_pago]);
     await conn.query(
@@ -1429,7 +1498,12 @@ exports.eliminarUltimoPago = async (req, res) => {
 
     await conn.commit();
     transactionStarted = false;
-    return res.json({ ok: true, id_pago: pago.id_pago });
+    const fallidos = await limpiarComprobantes(rutasArchivos);
+    return res.json({
+      ok: true,
+      id_pago: pago.id_pago,
+      ...(fallidos ? { advertencia: 'El pago se eliminó, pero no se pudieron borrar todos sus archivos.' } : {})
+    });
   } catch (error) {
     if (transactionStarted) await conn.rollback();
     console.error('Error al eliminar el último pago:', error);
@@ -1690,6 +1764,7 @@ exports.registrarPagoMasivo = async (req, res) => {
       capitalContratoActual = 0;
     }
 
+    await marcarMovimiento(conn, pagosInsertados.map((p) => p.id_pago));
     await actualizarContratoYLote(conn, contrato, capitalContratoActual);
     await conn.commit();
 
@@ -1919,6 +1994,7 @@ exports.pagosPorContrato = async (req, res) => {
     const [rows] = await db.query(
       `
       SELECT
+        d.id_documento,
         p.id_pago,
         p.fecha_abono,
         p.monto_total,
@@ -1995,6 +2071,141 @@ exports.estadoContrato = async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'Error al obtener estado' });
+  } finally {
+    conn.release();
+  }
+};
+
+// ULTIMO PAGO DEL CONTRATO (vista previa antes de anular)
+exports.ultimoPago = async (req, res) => {
+  try {
+    const movimiento = await obtenerUltimoMovimiento(db, req.params.idContrato);
+    if (!movimiento) {
+      return res.status(404).json({ error: 'El contrato no tiene pagos' });
+    }
+
+    const { pagos, ...resumen } = movimiento;
+    res.json(resumen);
+  } catch (error) {
+    console.error('ERROR ULTIMO PAGO:', error);
+    res.status(500).json({ error: 'Error al obtener el ultimo pago' });
+  }
+};
+
+// ANULAR ULTIMO PAGO: devuelve el capital a cuotas y contrato, guarda bitacora y borra el pago
+exports.anularUltimoPago = async (req, res) => {
+  const conn = await db.getConnection();
+  let rutasArchivos = [];
+
+  try {
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) {
+      return res.status(400).json({ error: 'El motivo es obligatorio' });
+    }
+
+    await conn.beginTransaction();
+
+    const [[contrato]] = await conn.query(
+      'SELECT * FROM contratos WHERE id_contrato = ? FOR UPDATE',
+      [req.params.idContrato]
+    );
+    if (!contrato) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Contrato no encontrado' });
+    }
+
+    const movimiento = await obtenerUltimoMovimiento(conn, contrato.id_contrato);
+    if (!movimiento) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'El contrato no tiene pagos' });
+    }
+
+    const hoyYMD = fechaHoyYMD();
+    for (const pago of movimiento.pagos) {
+      const [[cuota]] = await conn.query(
+        'SELECT capital_pendiente, fecha_vencimiento FROM cuotas WHERE id_cuota = ? FOR UPDATE',
+        [pago.id_cuota]
+      );
+      const capitalCuota = round2(
+        toNumber(cuota.capital_pendiente) + toNumber(pago.abono_capital)
+      );
+
+      await conn.query(
+        'UPDATE cuotas SET capital_pendiente = ?, estado = ? WHERE id_cuota = ?',
+        [
+          capitalCuota,
+          estadoCuotaSegunFecha(capitalCuota, hoyYMD, cuota.fecha_vencimiento),
+          pago.id_cuota
+        ]
+      );
+    }
+
+    const capitalContrato = round2(
+      toNumber(contrato.capital_pendiente) + movimiento.abono_capital
+    );
+    await conn.query(
+      'UPDATE contratos SET capital_pendiente = ? WHERE id_contrato = ?',
+      [capitalContrato, contrato.id_contrato]
+    );
+
+    // Si este pago habia cancelado el contrato, vuelve a quedar activo
+    if (contrato.estado === 'cancelado' && capitalContrato > 0) {
+      await conn.query(
+        "UPDATE contratos SET estado = 'activo' WHERE id_contrato = ?",
+        [contrato.id_contrato]
+      );
+      await conn.query(
+        "UPDATE lotes SET estado = 'promesa_venta' WHERE id_lote = ?",
+        [contrato.id_lote]
+      );
+    }
+
+    const idsPago = movimiento.pagos.map((p) => p.id_pago);
+    const [documentos] = await conn.query(
+      'SELECT id_pago, ruta_archivo FROM documentos WHERE id_pago IN (?)',
+      [idsPago]
+    );
+    rutasArchivos = documentos.map((d) => d.ruta_archivo);
+
+    await conn.query(
+      `
+      INSERT INTO pagos_anulados
+      (id_contrato, id_movimiento, monto_total, abono_capital, motivo, detalle)
+      VALUES (?,?,?,?,?,?)
+      `,
+      [
+        contrato.id_contrato,
+        movimiento.id_movimiento,
+        movimiento.monto_total,
+        movimiento.abono_capital,
+        motivo,
+        JSON.stringify({
+          pagos: movimiento.pagos.map(({ fecha_abono_ymd, ...p }) => p),
+          documentos
+        })
+      ]
+    );
+
+    await conn.query('DELETE FROM documentos WHERE id_pago IN (?)', [idsPago]);
+    await conn.query('DELETE FROM recibos WHERE id_pago IN (?)', [idsPago]);
+    await conn.query('DELETE FROM pagos WHERE id_pago IN (?)', [idsPago]);
+
+    await conn.commit();
+
+    // Los archivos se borran despues del commit: si fallan, el pago ya quedo anulado
+    const fallidos = await limpiarComprobantes(rutasArchivos);
+
+    const { pagos, ...resumen } = movimiento;
+    res.json({
+      ok: true,
+      anulado: resumen,
+      capital_pendiente_contrato: capitalContrato,
+      ...(fallidos ? { advertencia: 'El pago se anuló, pero no se pudieron borrar todos sus archivos.' } : {})
+    });
+  } catch (error) {
+    await conn.rollback();
+    console.error('ERROR ANULAR PAGO:', error);
+    res.status(500).json({ error: 'Error al anular el pago' });
   } finally {
     conn.release();
   }

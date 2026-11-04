@@ -205,8 +205,49 @@ function renderContratosPago(contratos) {
     `;
   });
 }
+async function anularUltimoPago() {
+  const idContrato = document.getElementById('idContratoActivo').value;
+  if (!idContrato) return;
+
+  const resUltimo = await fetch(`http://localhost:3000/api/pagos/ultimo/${idContrato}`);
+  const ultimo = await resUltimo.json();
+  if (!resUltimo.ok) {
+    alert(ultimo.error || 'No se pudo obtener el ultimo pago');
+    return;
+  }
+
+  const motivo = prompt(
+    `Se anulara el ultimo pago del contrato ${idContrato}:\n\n` +
+    `Fecha de abono: ${ultimo.fecha_abono}\n` +
+    `Recibo: ${ultimo.numero_recibo || '-'}\n` +
+    `Cuotas: ${ultimo.cuotas.join(', ')}\n` +
+    `Monto total: $${Number(ultimo.monto_total).toFixed(2)}\n\n` +
+    'Se borran tambien sus comprobantes. Escriba el motivo para confirmar:'
+  );
+  if (motivo === null) return;
+  if (!motivo.trim()) {
+    alert('El motivo es obligatorio');
+    return;
+  }
+
+  const res = await fetch(`http://localhost:3000/api/pagos/anular-ultimo/${idContrato}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ motivo: motivo.trim() })
+  });
+  const result = await res.json();
+  if (!res.ok) {
+    alert(result.error || 'Error al anular el pago');
+    return;
+  }
+
+  alert('Pago anulado. Ya puede registrarlo de nuevo con el monto correcto.');
+  await seleccionarContratoPago(idContrato);
+}
+
 function renderEstadoCuenta(data) {
 
+  document.getElementById('btnAnularUltimoPago').classList.remove('d-none');
   const tbody = document.getElementById('tablaEstadoCuenta');
   tbody.innerHTML = '';
   const limitesFecha = data?.limites_fecha_abono || {
