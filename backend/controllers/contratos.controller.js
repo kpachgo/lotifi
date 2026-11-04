@@ -102,13 +102,14 @@ function generarPlanCapital({
 // BUSCAR CLIENTE
 exports.buscarCliente = async (req, res) => {
   try {
-    const texto = `%${req.params.texto}%`;
+    const texto = `%${req.params.texto.trim()}%`;
 
     const [rows] = await db.query(
       `SELECT id_cliente, nombres, apellidos, dui
        FROM cliente
        WHERE nombres LIKE ? OR apellidos LIKE ?
-       ORDER BY nombres`,
+       ORDER BY nombres
+       LIMIT 10`,
       [texto, texto]
     );
 
@@ -505,5 +506,4 @@ exports.actualizarContrato = async (req, res) => {
     conn.release();
   }
 };
-
 

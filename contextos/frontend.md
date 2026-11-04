@@ -52,12 +52,14 @@ La migración está en curso: **no todo el frontend usa React todavía**. Las p�
 
 ## Pendiente
 
+El registro detallado de cambios pendientes, validaciones manuales y el tercer tipo de financiamiento está en [cambios-pendientes.md](./cambios-pendientes.md).
+
 1. Validar manualmente cada módulo React con datos reales: formularios, filtros, errores, estados vacíos y navegación móvil.
 2. Revisar específicamente los cálculos/fechas permitidos de pagos, los pagos masivos, carga de comprobantes, impresión y ventanas emergentes.
-4. Revisar el recibo imprimible: se mantiene como documento HTML independiente mientras se valida su flujo desde Pagos.
-5. Las páginas HTML/JS antiguas siguen en el repositorio y Express aún las sirve; retirarlas solo después de comprobar equivalencia y confirmar que no haya enlaces externos.
-6. Agregar pruebas automatizadas para componentes y flujos principales. El frontend todavía no tiene un runner de pruebas configurado.
-7. Revisar los avisos de `npm audit` reportados al instalar dependencias antes de actualizar versiones; no aplicar actualizaciones mayores automáticamente.
+3. Revisar el recibo imprimible: se mantiene como documento HTML independiente mientras se valida su flujo desde Pagos.
+4. Las páginas HTML/JS antiguas siguen en el repositorio y Express aún las sirve; retirarlas solo después de comprobar equivalencia y confirmar que no haya enlaces externos.
+5. Agregar pruebas automatizadas para componentes y flujos principales. El frontend todavía no tiene un runner de pruebas configurado.
+6. Revisar los avisos de `npm audit` reportados al instalar dependencias antes de actualizar versiones; no aplicar actualizaciones mayores automáticamente.
 
 ## Ejecutar
 

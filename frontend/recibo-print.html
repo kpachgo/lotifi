@@ -87,6 +87,7 @@ html, body {
   <div id="concepto-linea2" class="field"></div>
   <!-- FIRMA -->
   <div id="firma-cliente" class="field"></div>
+  <div id="estado-recibo" role="status" style="position: fixed; inset: 1rem auto auto 1rem; font-size: 12pt;"></div>
 </div>
 <script>
 // ===============================
@@ -94,55 +95,65 @@ html, body {
 // ===============================
 const params = new URLSearchParams(window.location.search);
 const idPago = params.get('id_pago');
-if (!idPago) {
-  alert('Falta id_pago');
+const idPagoPrima = params.get('id_pago_prima');
+const idRecibo = idPagoPrima || idPago;
+if (!idRecibo) {
+  document.getElementById('estado-recibo').innerText = 'Falta el identificador del pago.';
+} else {
+  const reciboUrl = idPagoPrima
+    ? `/api/recibos/prima/${encodeURIComponent(idPagoPrima)}`
+    : `/api/recibos/pago/${encodeURIComponent(idPago)}`;
+  fetch(reciboUrl)
+    .then(async res => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo cargar el recibo.');
+      return data;
+    })
+    .then(data => {
+      // CLIENTE
+      document.getElementById('cliente-nombre').innerText = data.cliente.nombre;
+      document.getElementById('cliente-direccion').innerText = data.cliente.direccion;
+      document.getElementById('cliente-doc').innerText = data.cliente.documento;
+      document.getElementById('cliente-tel').innerText = data.cliente.telefono;
+      document.getElementById('codigo-lote').innerText = data.cliente.codigo_lote || '';
+      // PAGO
+      document.getElementById('cuota-mensual').innerText =
+        `$${Number(data.pago.cuota_mensual).toFixed(2)}`;
+      document.getElementById('abono-total').innerText =
+        `$${Number(data.pago.abono_total).toFixed(2)}`;
+      document.getElementById('forma-pago').innerText = data.pago.forma_pago;
+      document.getElementById('banco').innerText = data.pago.banco || '';
+      document.getElementById('fecha-abono').innerText =
+        formatFecha(data.pago.fecha_abono);
+      document.getElementById('fecha-recibo').innerText =
+        formatFecha(data.pago.fecha_recibo);
+      // SALDOS
+      document.getElementById('saldo-anterior').innerText =
+        `$${Number(data.saldos.saldo_anterior).toFixed(2)}`;
+      document.getElementById('menos-abono').innerText =
+        `$${Number(data.saldos.menos_abono).toFixed(2)}`;
+      document.getElementById('saldo-actual').innerText =
+        `$${Number(data.saldos.saldo_actual).toFixed(2)}`;
+      document.getElementById('saldo-acumulado').innerText =
+        `$${Number(data.saldos.saldo_acumulado).toFixed(2)}`;
+      // TEXTO
+      document.getElementById('cantidad-letras').innerText =
+        data.texto.cantidad_letras;
+      document.getElementById('concepto-linea1').innerText =
+        data.texto.concepto[0];
+      document.getElementById('concepto-linea2').innerText =
+        data.texto.concepto[1];
+      // FIRMA
+      document.getElementById('firma-cliente').innerText =
+        data.cliente.nombre;
+      document.getElementById('estado-recibo').remove();
+      setTimeout(() => window.print(), 500);
+    })
+    .catch(error => {
+      console.error('Error al cargar recibo:', error);
+      document.getElementById('estado-recibo').innerText = error.message || 'No se pudo cargar el recibo.';
+    });
 }
-fetch(`http://localhost:3002/api/recibos/pago/${idPago}`)
-  .then(res => res.json())
-  .then(data => {
-    // CLIENTE
-    document.getElementById('cliente-nombre').innerText = data.cliente.nombre;
-    document.getElementById('cliente-direccion').innerText = data.cliente.direccion;
-    document.getElementById('cliente-doc').innerText = data.cliente.documento;
-    document.getElementById('cliente-tel').innerText = data.cliente.telefono;
-    document.getElementById('codigo-lote').innerText = data.cliente.codigo_lote || '';
-    // PAGO
-    document.getElementById('cuota-mensual').innerText =
-      `$${data.pago.cuota_mensual.toFixed(2)}`;
-    document.getElementById('abono-total').innerText =
-      `$${data.pago.abono_total.toFixed(2)}`;
-    document.getElementById('forma-pago').innerText = data.pago.forma_pago;
-    document.getElementById('banco').innerText = data.pago.banco || '';
-    document.getElementById('fecha-abono').innerText =
-      formatFecha(data.pago.fecha_abono);
-    document.getElementById('fecha-recibo').innerText =
-      formatFecha(data.pago.fecha_recibo);
-    // SALDOS
-    document.getElementById('saldo-anterior').innerText =
-      `$${data.saldos.saldo_anterior.toFixed(2)}`;
-    document.getElementById('menos-abono').innerText =
-      `$${data.saldos.menos_abono.toFixed(2)}`;
-    document.getElementById('saldo-actual').innerText =
-      `$${data.saldos.saldo_actual.toFixed(2)}`;
-    document.getElementById('saldo-acumulado').innerText =
-      `$${data.saldos.saldo_acumulado.toFixed(2)}`;
-    // TEXTO
-    document.getElementById('cantidad-letras').innerText =
-      data.texto.cantidad_letras;
-    document.getElementById('concepto-linea1').innerText =
-      data.texto.concepto[0];
-    document.getElementById('concepto-linea2').innerText =
-      data.texto.concepto[1];
-    // FIRMA
-    document.getElementById('firma-cliente').innerText =
-      data.cliente.nombre;
-    // IMPRIMIR AUTOMÁTICO
-    setTimeout(() => window.print(), 500);
-    // CERRAR DESPUÉS DE IMPRIMIR
-    window.onafterprint = () => {
-    window.close();
-};
-  });
 function formatFecha(fecha) {
   if (!fecha) return '';
   const d = new Date(fecha);

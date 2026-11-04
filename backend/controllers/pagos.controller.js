@@ -1,9 +1,21 @@
-const fs = require('fs');
-const path = require('path');
 const db = require('../config/db');
+const { eliminarComprobante } = require('../services/comprobantes.storage');
 
 const MORA_MENSUAL_INTERES_SALDO = 0.035;
 const DIAS_BASE_MORA = 30;
+
+async function limpiarComprobantes(rutas) {
+  let fallidos = 0;
+  for (const ruta of rutas) {
+    try {
+      await eliminarComprobante(ruta);
+    } catch (error) {
+      fallidos += 1;
+      console.error('ERROR ELIMINAR ARCHIVO DE COMPROBANTE:', error);
+    }
+  }
+  return fallidos;
+}
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -1398,6 +1410,7 @@ exports.editarMontoUltimoPago = async (req, res) => {
 exports.eliminarUltimoPago = async (req, res) => {
   const conn = await db.getConnection();
   let transactionStarted = false;
+  let rutasArchivos = [];
 
   try {
     await conn.beginTransaction();
@@ -1452,6 +1465,12 @@ exports.eliminarUltimoPago = async (req, res) => {
       toNumber(pago.capital_pendiente_contrato) + toNumber(pago.abono_capital)
     );
 
+    const [documentos] = await conn.query(
+      'SELECT ruta_archivo FROM documentos WHERE id_pago = ?',
+      [pago.id_pago]
+    );
+    rutasArchivos = documentos.map(documento => documento.ruta_archivo);
+
     await conn.query('DELETE FROM documentos WHERE id_pago = ?', [pago.id_pago]);
     await conn.query('DELETE FROM pagos WHERE id_pago = ?', [pago.id_pago]);
     await conn.query(
@@ -1479,7 +1498,12 @@ exports.eliminarUltimoPago = async (req, res) => {
 
     await conn.commit();
     transactionStarted = false;
-    return res.json({ ok: true, id_pago: pago.id_pago });
+    const fallidos = await limpiarComprobantes(rutasArchivos);
+    return res.json({
+      ok: true,
+      id_pago: pago.id_pago,
+      ...(fallidos ? { advertencia: 'El pago se eliminó, pero no se pudieron borrar todos sus archivos.' } : {})
+    });
   } catch (error) {
     if (transactionStarted) await conn.rollback();
     console.error('Error al eliminar el último pago:', error);
@@ -1970,6 +1994,7 @@ exports.pagosPorContrato = async (req, res) => {
     const [rows] = await db.query(
       `
       SELECT
+        d.id_documento,
         p.id_pago,
         p.fecha_abono,
         p.monto_total,
@@ -2168,14 +2193,15 @@ exports.anularUltimoPago = async (req, res) => {
     await conn.commit();
 
     // Los archivos se borran despues del commit: si fallan, el pago ya quedo anulado
-    for (const ruta of rutasArchivos) {
-      for (const candidato of [path.resolve(ruta), path.resolve('backend', ruta)]) {
-        fs.unlink(candidato, () => {});
-      }
-    }
+    const fallidos = await limpiarComprobantes(rutasArchivos);
 
     const { pagos, ...resumen } = movimiento;
-    res.json({ ok: true, anulado: resumen, capital_pendiente_contrato: capitalContrato });
+    res.json({
+      ok: true,
+      anulado: resumen,
+      capital_pendiente_contrato: capitalContrato,
+      ...(fallidos ? { advertencia: 'El pago se anuló, pero no se pudieron borrar todos sus archivos.' } : {})
+    });
   } catch (error) {
     await conn.rollback();
     console.error('ERROR ANULAR PAGO:', error);

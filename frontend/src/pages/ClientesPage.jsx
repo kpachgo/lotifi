@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Badge, Box, Button, CloseButton, Dialog, Field, Flex, Heading, Input,
+  Accordion, Badge, Box, Button, CloseButton, Dialog, Field, Flex, Heading, Input,
   Portal, SimpleGrid, Table, Text, Textarea
 } from '@chakra-ui/react';
-import { ChevronLeft, ChevronRight, Pencil, Plus, Search, Users } from 'lucide-react';
+import {
+  ChevronLeft, ChevronRight, IdCard, MapPin, Pencil, Phone, Plus, Search,
+  Trash2, UserRound, Users
+} from 'lucide-react';
 import { apiRequest } from '../api.js';
 
 const pageSize = 20;
@@ -12,6 +15,14 @@ const emptyForm = {
   apellidos: '',
   dui: '',
   nit: '',
+  telefono: '',
+  direccion: ''
+};
+const emptyContact = {
+  nombres: '',
+  apellidos: '',
+  parentesco: '',
+  dui: '',
   telefono: '',
   direccion: ''
 };
@@ -25,17 +36,43 @@ function initials(cliente) {
     .toUpperCase() || '?';
 }
 
+function FormSectionHeading({ icon: Icon, title, description }) {
+  return (
+    <Flex className="guided-section-heading" align="center" gap="3">
+      <span className="guided-section-icon"><Icon size={18} aria-hidden="true" /></span>
+      <Box>
+        <Heading size="sm">{title}</Heading>
+        <Text className="guided-section-description">{description}</Text>
+      </Box>
+    </Flex>
+  );
+}
+
+function IconFieldLabel({ icon: Icon, children }) {
+  return (
+    <Field.Label>
+      <span className="guided-field-label"><Icon size={15} aria-hidden="true" />{children}</span>
+    </Field.Label>
+  );
+}
+
 export default function ClientesPage() {
   const [clientes, setClientes] = useState([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [contactos, setContactos] = useState([]);
+  const [expandedContacts, setExpandedContacts] = useState([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsLoadFailed, setContactsLoadFailed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const contactLoadId = useRef(0);
+  const nextContactKey = useRef(0);
 
   async function loadClientes() {
     setLoading(true);
@@ -70,13 +107,19 @@ export default function ClientesPage() {
   }, [query]);
 
   function openNew() {
+    contactLoadId.current += 1;
     setEditing(null);
     setForm(emptyForm);
+    setContactos([]);
+    setExpandedContacts([]);
+    setContactsLoading(false);
+    setContactsLoadFailed(false);
     setError('');
     setDialogOpen(true);
   }
 
-  function openEdit(cliente) {
+  async function openEdit(cliente) {
+    const requestId = ++contactLoadId.current;
     setEditing(cliente);
     setForm({
       nombres: cliente.nombres || '',
@@ -86,16 +129,50 @@ export default function ClientesPage() {
       telefono: cliente.telefono || '',
       direccion: cliente.direccion || ''
     });
+    setContactos([]);
+    setExpandedContacts([]);
+    setContactsLoading(true);
+    setContactsLoadFailed(false);
     setError('');
     setDialogOpen(true);
+    try {
+      const details = await apiRequest(`/api/cliente/${cliente.id_cliente}`);
+      if (requestId !== contactLoadId.current) return;
+      if (!Array.isArray(details.contactos)) {
+        throw new Error('El servidor devolvió una lista de contactos inválida.');
+      }
+      setContactos(details.contactos.map(contacto => ({
+        key: `saved-${contacto.id_contacto}`,
+        nombres: contacto.nombres || '',
+        apellidos: contacto.apellidos || '',
+        parentesco: contacto.parentesco || '',
+        dui: contacto.dui || '',
+        telefono: contacto.telefono || '',
+        direccion: contacto.direccion || ''
+      })));
+    } catch (loadError) {
+      if (requestId !== contactLoadId.current) return;
+      setContactsLoadFailed(true);
+      setError(loadError.message || 'No se pudieron cargar los contactos del cliente.');
+    } finally {
+      if (requestId === contactLoadId.current) setContactsLoading(false);
+    }
   }
 
   function updateField(event) {
     setForm(current => ({ ...current, [event.target.name]: event.target.value }));
   }
 
+  function updateContact(index, event) {
+    const { name, value } = event.target;
+    setContactos(current => current.map((contacto, contactIndex) =>
+      contactIndex === index ? { ...contacto, [name]: value } : contacto
+    ));
+  }
+
   async function saveCliente(event) {
     event.preventDefault();
+    if (contactsLoading || contactsLoadFailed) return;
     setSaving(true);
     setError('');
     try {
@@ -106,7 +183,15 @@ export default function ClientesPage() {
         dui: form.dui.trim(),
         nit: form.nit.trim() || null,
         telefono: form.telefono.trim(),
-        direccion: form.direccion.trim()
+        direccion: form.direccion.trim(),
+        contactos: contactos.map(contacto => ({
+          nombres: contacto.nombres.trim(),
+          apellidos: contacto.apellidos.trim(),
+          parentesco: contacto.parentesco.trim(),
+          dui: contacto.dui.trim(),
+          telefono: contacto.telefono.trim(),
+          direccion: contacto.direccion.trim()
+        }))
       };
       await apiRequest(editing ? `/api/cliente/${editing.id_cliente}` : '/api/cliente', {
         method: editing ? 'PUT' : 'POST',
@@ -213,7 +298,10 @@ export default function ClientesPage() {
         )}
       </section>
 
-      <Dialog.Root open={dialogOpen} onOpenChange={details => setDialogOpen(details.open)} size="lg" placement="center">
+      <Dialog.Root open={dialogOpen} onOpenChange={details => {
+        if (!details.open) contactLoadId.current += 1;
+        setDialogOpen(details.open);
+      }} size="xl" placement="center">
         <Portal>
           <Dialog.Backdrop />
           <Dialog.Positioner>
@@ -222,45 +310,156 @@ export default function ClientesPage() {
                 <Dialog.Header>
                   <Box>
                     <Dialog.Title>{editing ? 'Editar cliente' : 'Nuevo cliente'}</Dialog.Title>
-                    <Text className="dialog-subtitle">Completa los datos personales y de contacto.</Text>
+                    <Text className="dialog-subtitle">Registra la información principal y las alternativas para contactar al cliente.</Text>
                   </Box>
                   <Dialog.CloseTrigger asChild><CloseButton size="sm" /></Dialog.CloseTrigger>
                 </Dialog.Header>
                 <Dialog.Body>
                   {error && <Box role="alert" className="notice-error dialog-error">{error}</Box>}
-                  <div className="form-section">Datos personales</div>
-                  <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
-                    <Field.Root required>
-                      <Field.Label>Nombres</Field.Label>
-                      <Input name="nombres" value={form.nombres} onChange={updateField} required />
-                    </Field.Root>
-                    <Field.Root required>
-                      <Field.Label>Apellidos</Field.Label>
-                      <Input name="apellidos" value={form.apellidos} onChange={updateField} required />
-                    </Field.Root>
-                    <Field.Root required>
-                      <Field.Label>DUI</Field.Label>
-                      <Input name="dui" value={form.dui} onChange={updateField} maxLength={10} placeholder="00000000-0" required />
-                    </Field.Root>
-                    <Field.Root>
-                      <Field.Label>NIT <span className="optional-label">Opcional</span></Field.Label>
-                      <Input name="nit" value={form.nit} onChange={updateField} maxLength={19} placeholder="0000-000000-000-0" />
-                    </Field.Root>
-                    <Field.Root>
-                      <Field.Label>Teléfono</Field.Label>
-                      <Input name="telefono" value={form.telefono} onChange={updateField} placeholder="XXXX-XXXX" />
-                    </Field.Root>
-                  </SimpleGrid>
-                  <div className="form-section address-section">Contacto</div>
-                  <Field.Root required>
-                    <Field.Label>Dirección</Field.Label>
-                    <Textarea name="direccion" value={form.direccion} onChange={updateField} rows={3} required />
-                  </Field.Root>
+                  <section className="guided-form-section">
+                    <FormSectionHeading icon={UserRound} title="Datos del cliente"
+                      description="Información personal para identificar al titular del contrato." />
+                    <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
+                      <Field.Root required>
+                        <IconFieldLabel icon={UserRound}>Nombres</IconFieldLabel>
+                        <Input name="nombres" value={form.nombres} onChange={updateField} maxLength={100} placeholder="Ej. María José" required />
+                      </Field.Root>
+                      <Field.Root required>
+                        <IconFieldLabel icon={UserRound}>Apellidos</IconFieldLabel>
+                        <Input name="apellidos" value={form.apellidos} onChange={updateField} maxLength={100} placeholder="Ej. Hernández López" required />
+                      </Field.Root>
+                    </SimpleGrid>
+                  </section>
+                  <section className="guided-form-section">
+                    <FormSectionHeading icon={IdCard} title="Identificación"
+                      description="Documentos de identificación del cliente." />
+                    <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
+                      <Field.Root required>
+                        <IconFieldLabel icon={IdCard}>DUI</IconFieldLabel>
+                        <Input name="dui" value={form.dui} onChange={updateField} maxLength={10} placeholder="Ej. 01234567-8" required />
+                      </Field.Root>
+                      <Field.Root>
+                        <IconFieldLabel icon={IdCard}>NIT <span className="optional-label">Opcional</span></IconFieldLabel>
+                        <Input name="nit" value={form.nit} onChange={updateField} maxLength={19} placeholder="Ej. 0614-120390-102-3" />
+                      </Field.Root>
+                    </SimpleGrid>
+                  </section>
+                  <section className="guided-form-section">
+                    <FormSectionHeading icon={Phone} title="Información de contacto"
+                      description="Usa un número telefónico en formato local, por ejemplo 7123-4567." />
+                    <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
+                      <Field.Root gridColumn={{ base: 'span 1', md: 'span 2' }}>
+                        <IconFieldLabel icon={Phone}>Teléfono</IconFieldLabel>
+                        <Input name="telefono" type="tel" value={form.telefono} onChange={updateField}
+                          maxLength={50} placeholder="Ej. 7123-4567" />
+                      </Field.Root>
+                      <Field.Root required gridColumn={{ base: 'span 1', md: 'span 2' }}>
+                        <IconFieldLabel icon={MapPin}>Dirección</IconFieldLabel>
+                        <Textarea name="direccion" value={form.direccion} onChange={updateField}
+                          maxLength={250} rows={2} placeholder="Cantón, colonia, calle y punto de referencia" required />
+                      </Field.Root>
+                    </SimpleGrid>
+                  </section>
+                  <Flex className="additional-contacts-heading" align="center" justify="space-between" gap="3">
+                    <FormSectionHeading icon={Users} title="Contactos adicionales"
+                      description="Personas de referencia para localizar al cliente." />
+                    <Button type="button" size="sm" variant="outline" onClick={() => {
+                      const key = `new-${nextContactKey.current++}`;
+                      setContactos(current => [...current, { ...emptyContact, key }]);
+                      setExpandedContacts(current => [...new Set([...current, key])]);
+                    }} disabled={contactsLoading}>
+                      <Plus size={16} aria-hidden="true" /> Agregar contacto
+                    </Button>
+                  </Flex>
+                  {contactsLoading ? (
+                    <Text className="table-subtitle">Cargando contactos del cliente…</Text>
+                  ) : contactsLoadFailed ? (
+                    <Text role="alert" className="table-subtitle">
+                      No se pueden guardar cambios hasta cargar los contactos existentes.
+                    </Text>
+                  ) : contactos.length === 0 ? (
+                    <Text className="table-subtitle">Aún no hay contactos adicionales registrados.</Text>
+                  ) : (
+                    <Accordion.Root
+                      className="customer-contact-accordion"
+                      multiple
+                      collapsible
+                      value={expandedContacts}
+                      onValueChange={details => setExpandedContacts(details.value)}
+                    >
+                      {contactos.map((contacto, index) => (
+                        <Accordion.Item className="customer-contact-item" key={contacto.key} value={contacto.key}>
+                          <Flex className="customer-contact-header" align="center" gap="2">
+                            <Accordion.ItemTrigger className="customer-contact-trigger">
+                              <Box className="customer-contact-summary">
+                                <Text fontWeight="semibold">
+                                  {[contacto.nombres, contacto.apellidos].filter(Boolean).join(' ') || `Contacto ${index + 1}`}
+                                </Text>
+                                <Text className="customer-contact-subtitle">
+                                  {[contacto.parentesco, contacto.telefono].filter(Boolean).join(' · ') || 'Completar datos del contacto'}
+                                </Text>
+                              </Box>
+                              <Accordion.ItemIndicator />
+                            </Accordion.ItemTrigger>
+                            <Button type="button" size="sm" variant="outline" colorPalette="red"
+                              aria-label={`Eliminar contacto ${index + 1}`}
+                              onClick={() => {
+                                setContactos(current => current.filter(item => item.key !== contacto.key));
+                                setExpandedContacts(current => current.filter(key => key !== contacto.key));
+                              }}>
+                              <Trash2 size={15} aria-hidden="true" /> Quitar
+                            </Button>
+                          </Flex>
+                          <Accordion.ItemContent>
+                            <Accordion.ItemBody>
+                              <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
+                                <Field.Root required>
+                                  <IconFieldLabel icon={UserRound}>Nombres</IconFieldLabel>
+                                  <Input name="nombres" value={contacto.nombres} onChange={event => updateContact(index, event)}
+                                    maxLength={100} placeholder="Ej. Ana María" required />
+                                </Field.Root>
+                                <Field.Root required>
+                                  <IconFieldLabel icon={UserRound}>Apellidos</IconFieldLabel>
+                                  <Input name="apellidos" value={contacto.apellidos} onChange={event => updateContact(index, event)}
+                                    maxLength={100} placeholder="Ej. Hernández López" required />
+                                </Field.Root>
+                                <Field.Root required>
+                                  <IconFieldLabel icon={Users}>Parentesco</IconFieldLabel>
+                                  <Input name="parentesco" value={contacto.parentesco} onChange={event => updateContact(index, event)}
+                                    maxLength={50} placeholder="Ej. Hermana, amigo" required />
+                                </Field.Root>
+                                <Field.Root>
+                                  <IconFieldLabel icon={IdCard}>DUI <span className="optional-label">Opcional</span></IconFieldLabel>
+                                  <Input name="dui" value={contacto.dui} onChange={event => updateContact(index, event)}
+                                    maxLength={15} placeholder="Ej. 01234567-8" />
+                                </Field.Root>
+                                <Field.Root required>
+                                  <IconFieldLabel icon={Phone}>Teléfono de contacto</IconFieldLabel>
+                                  <Input name="telefono" value={contacto.telefono} onChange={event => updateContact(index, event)}
+                                    type="tel" maxLength={50} placeholder="Ej. 7123-4567" required />
+                                </Field.Root>
+                                <Field.Root>
+                                  <IconFieldLabel icon={MapPin}>Dirección <span className="optional-label">Opcional</span></IconFieldLabel>
+                                  <Textarea name="direccion" value={contacto.direccion} onChange={event => updateContact(index, event)}
+                                    maxLength={250} rows={2} placeholder="Cantón, colonia, calle o referencia" />
+                                </Field.Root>
+                              </SimpleGrid>
+                            </Accordion.ItemBody>
+                          </Accordion.ItemContent>
+                        </Accordion.Item>
+                      ))}
+                    </Accordion.Root>
+                  )}
                 </Dialog.Body>
                 <Dialog.Footer>
-                  <Button variant="outline" onClick={() => setForm(emptyForm)} type="button">Limpiar</Button>
+                  <Button variant="outline" onClick={() => {
+                    setForm(emptyForm);
+                    setContactos([]);
+                    setExpandedContacts([]);
+                  }} type="button">Limpiar</Button>
                   <Button variant="outline" onClick={() => setDialogOpen(false)} type="button">Cancelar</Button>
-                  <Button colorPalette="blue" type="submit" loading={saving}>
+                  <Button colorPalette="blue" type="submit" loading={saving}
+                    disabled={contactsLoading || contactsLoadFailed}>
                     {editing ? 'Guardar cambios' : 'Guardar cliente'}
                   </Button>
                 </Dialog.Footer>
