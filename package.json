@@ -1,0 +1,9 @@
+{
+  "name": "lotifi",
+  "private": true,
+  "engines": { "node": "22" },
+  "scripts": {
+    "build": "npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix backend ci --omit=dev",
+    "start": "cd backend && node server.js"
+  }
+}
